@@ -1,0 +1,15 @@
+[package]
+name = "fondabots-lib"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+chrono = "0.4"
+openssl = {version = "0.10", features = ["vendored"]}
+serenity = "0.12"
+tokio = { version = "1.21.2", features = ["macros", "rt-multi-thread"] }
+rss = "2.0"
+reqwest = "0.12"
+poise = "0.6"
+async-trait = "0.1"
+yaml-rust2 = "0.8"
