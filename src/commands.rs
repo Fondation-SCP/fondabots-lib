@@ -1,3 +1,5 @@
+use std::process::exit;
+
 use poise::{CreateReply, serenity_prelude as serenity};
 use poise::Command;
 use poise::Context;
@@ -227,10 +229,40 @@ pub async fn maj<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<()
 }
 
 
+#[poise::command(slash_command, owners_only)]
+pub async fn delete_commands<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
+    let serenity_ctx = ctx.serenity_context();
+
+    // Fetch global commands
+    let global_commands = serenity_ctx.http.get_global_commands().await?;
+
+    // Delete each global command
+    for command in global_commands {
+        println!("Suppression de la commande {}", command.name);
+        serenity_ctx.http.delete_global_command(command.id).await?;
+    }
+
+    // Fetch the guilds the bot is a part of
+    let guilds = serenity_ctx.http.get_guilds(None, None).await?;
+
+    // Delete guild-specific commands
+    for guild in guilds {
+        let guild_commands = serenity_ctx.http.get_guild_commands(guild.id).await?;
+        for command in guild_commands {
+            println!("Suppression de la commande de serveur {}", command.name);
+            serenity_ctx.http.delete_guild_command(guild.id, command.id).await?;
+        }
+    }
+
+    ctx.say("Commandes du bot supprimées. Le bot va désormais s’éteindre.").await?;
+    exit(0);
+}
+
+
 
 
 pub fn command_list<T: Object>() -> Vec<Command<DataType<T>, ErrType>> {
     vec![rechercher(), plop(), supprimer(), annuler(), update_affichans(), renommer(), doublons(),
          up(), refresh_affichans(), bdd(), taille_bdd(), save(), maj(),
-        alias("search", rechercher())]
+        alias("search", rechercher()), delete_commands()]
 }

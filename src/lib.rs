@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::fmt::{Debug};
+use std::fmt::Debug;
 use std::fs;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -22,6 +22,7 @@ use yaml_rust2::{Yaml, yaml, YamlEmitter, YamlLoader};
 
 use affichan::Affichan;
 pub use errors::Error as ErrType;
+
 use crate::tools::basicize;
 
 pub mod affichan;
@@ -169,35 +170,6 @@ impl<T: Object> Bot<T> {
             .setup(|ctx, ready, framework| {
                 Box::pin(async move {
                     println!("Bot connecté à Discord. Réglage des derniers détails.");
-                    /*
-                    // Code à décommenter pour nettoyer les commandes d’un bot
-
-                    let application_info = ctx.http.get_current_application_info().await?;
-                    let application_id = application_info.id;
-
-                    // Fetch global commands
-                    let global_commands = ctx.http.get_global_commands().await?;
-
-                    // Delete each global command
-                    for command in global_commands {
-                        println!("Suppression de la commande {}", command.name);
-                        ctx.http.delete_global_command(command.id).await?;
-                    }
-
-                    // Fetch the guilds the bot is a part of
-                    let guilds = ctx.http.get_guilds(None, None).await?;
-
-                    // Delete guild-specific commands
-                    for guild in guilds {
-                        let guild_commands = ctx.http.get_guild_commands(guild.id).await?;
-                        for command in guild_commands {
-                            println!("Suppression de la commande de serveur {}", command.name);
-                            ctx.http.delete_guild_command(guild.id, command.id).await?;
-                        }
-                    }
-
-                    panic!("Travail terminé.");
-                    */
                     println!("Enregistrement des commandes.");
                     poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                     println!("Récupération de l’identifiant.");
