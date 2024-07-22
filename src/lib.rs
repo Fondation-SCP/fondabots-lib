@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::fmt::Debug;
 use std::fs;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -11,7 +10,7 @@ use poise::Context;
 use poise::reply::CreateReply;
 use serenity::all::{ButtonStyle, Context as SerenityContext, CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage, GuildChannel, MessageId};
 use serenity::all::{ComponentInteraction, CreateButton, GatewayIntents};
-use serenity::all::{CreateActionRow, CreateMessage, EditMessage, Interaction};
+use serenity::all::{CreateActionRow, EditMessage, Interaction};
 use serenity::all::UserId;
 use serenity::client::ClientBuilder;
 use serenity::CreateEmbed;
@@ -22,6 +21,8 @@ use yaml_rust2::{Yaml, yaml, YamlEmitter, YamlLoader};
 
 use affichan::Affichan;
 pub use errors::Error as ErrType;
+#[deprecated(since = "1.1.0", note = "Utiliser fondabots_lib::object::Object")]
+pub use object::Object;
 
 use crate::tools::basicize;
 
@@ -29,37 +30,9 @@ pub mod affichan;
 mod commands;
 pub mod errors;
 pub mod tools;
-
+pub mod generic_commands;
+pub mod object;
 pub type DataType<T> = Arc<Mutex<Bot<T>>>;
-
-pub trait Object: Send + Sync + 'static + PartialEq + Clone + Debug {
-    fn new() -> Self;
-    fn get_id(&self) -> u64;
-    fn from_yaml(data: &Yaml) -> Result<Self, ErrType>;
-    fn serialize(&self) -> Yaml;
-    fn is_modified(&self) -> bool;
-    fn set_modified(&mut self, modified: bool);
-    fn get_embed(&self) -> CreateEmbed;
-    fn get_buttons(&self) -> CreateActionRow;
-    fn get_message(&self) -> CreateMessage {
-        CreateMessage::new().embed(self.get_embed()).components(vec![self.get_buttons()])
-    }
-    fn get_message_edit(&self) -> EditMessage {
-        EditMessage::new().embed(self.get_embed()).components(vec![self.get_buttons()])
-    }
-    fn get_reply(&self) -> CreateReply {
-        CreateReply::default().embed(self.get_embed()).components(vec![self.get_buttons()])
-    }
-    fn get_name(&self) -> &String;
-    fn set_name(&mut self, s: String);
-    fn get_list_entry(&self) -> String;
-
-    fn up(&mut self);
-
-    fn buttons(ctx: &SerenityContext, interaction: &mut ComponentInteraction, bot: &mut Bot<Self>) -> impl std::future::Future<Output = Result<(), ErrType>> + Send;
-
-    fn maj_rss(bot: &DataType<Self>) -> impl std::future::Future<Output = Result<(), ErrType>> + Send;
-}
 
 pub struct Bot<T: Object> {
     pub database: HashMap<u64, T>,
@@ -378,6 +351,7 @@ impl<T: Object> Bot<T> {
         Ok(())
     }
 
+    #[deprecated(since = "1.1.0", note = "Déplacé à fondabots_lib::tools::get_multimessages")]
     pub fn get_multimessages(pages: Vec<String>, template: CreateEmbed) -> Vec<CreateEmbed> {
         let mut embeds = Vec::new();
         let mut counter = 1;

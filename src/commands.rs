@@ -9,10 +9,10 @@ use serenity::all::CreateAttachment;
 use crate::tools::alias;
 use crate::tools::get_object;
 
-use super::Bot;
 use super::DataType;
 use super::ErrType;
 use super::Object;
+use super::tools;
 
 pub fn aucun_resultat(recherche: &str) -> CreateEmbed {
     CreateEmbed::new()
@@ -55,7 +55,7 @@ pub async fn rechercher<T: Object>(
             buffer += to_add.as_str();
         }
         messages.push(buffer);
-        bot.send_embed(&ctx, Bot::<T>::get_multimessages(messages, CreateEmbed::new()
+        bot.send_embed(&ctx, tools::get_multimessages(messages, CreateEmbed::new()
             .title("Résultatss de la recherche")
             .author(CreateEmbedAuthor::new(format!("Recherche : {critere}")))
             .timestamp(Timestamp::now())
