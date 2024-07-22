@@ -1,5 +1,3 @@
-use std::process::exit;
-
 use poise::{CreateReply, serenity_prelude as serenity};
 use poise::Command;
 use poise::Context;
@@ -232,7 +230,7 @@ pub async fn maj<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<()
 #[poise::command(slash_command, owners_only)]
 pub async fn delete_commands<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     let serenity_ctx = ctx.serenity_context();
-
+    ctx.defer().await?;
     // Fetch global commands
     let global_commands = serenity_ctx.http.get_global_commands().await?;
 
@@ -255,7 +253,7 @@ pub async fn delete_commands<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) 
     }
 
     ctx.say("Commandes du bot supprimées. Le bot va désormais s’éteindre.").await?;
-    exit(0);
+    panic!("Commande delete_commands terminée.")
 }
 
 

@@ -8,25 +8,6 @@ use crate::object::Field;
 use crate::object::Object;
 use crate::tools::get_object;
 
-pub fn gcom<T: Object, F: Fn() -> poise::Command<DataType<T>, ErrType>>(
-    f: &F,
-    name: &str,
-    description: &str,
-    args: Vec<(&str, &str)>
-) -> poise::Command<DataType<T>, ErrType> {
-    let mut com = f();
-    com.name = name.to_string();
-    com.description = Some(description.to_string());
-    if args.len() != com.parameters.len() {
-        panic!("Erreur : le nombre d’arguments donnés pour la commande {name} ne correspond pas au nombre d’arguments réel.");
-    }
-    for i in 0..args.len() {
-        com.parameters[i].name = args[i].0.to_string();
-        com.parameters[i].description = Some(args[i].1.to_string());
-    }
-    com
-}
-
 fn _lister_aux<'a, T: Object, E: Field<T>>(database: &'a HashMap<u64, T>, field: &Option<E>) -> HashSet<&'a u64> {
     let mut res = Vec::new();
     for e in database {
@@ -38,12 +19,6 @@ fn _lister_aux<'a, T: Object, E: Field<T>>(database: &'a HashMap<u64, T>, field:
     res.into_iter().map(|(id, _) | {id}).collect()
 }
 
-
-
-
-
-/// Liste tous les objets d’après deux propriétés.
-#[poise::command(slash_command)]
 pub async fn lister_two<T: Object, E1: Field<T>, E2: Field<T>>(
     ctx: Context<'_, DataType<T>, ErrType>,
     field1: Option<E1>,
@@ -93,7 +68,7 @@ pub async fn lister_two<T: Object, E1: Field<T>, E2: Field<T>>(
     Ok(())
 }
 
-#[poise::command(slash_command)]
+
 pub async fn change_field<T: Object, F: Field<T>>(ctx: Context<'_, DataType<T>, ErrType>,
                     critere: String,
                     field: F) -> Result<(), ErrType> {
