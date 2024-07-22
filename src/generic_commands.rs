@@ -10,24 +10,24 @@ use crate::tools::get_object;
 
 pub fn gcom<T: Object, F: Fn() -> poise::Command<DataType<T>, ErrType>>(
     f: &F,
-    name: String,
-    description: String,
-    args: Vec<(String, String)>
+    name: &str,
+    description: &str,
+    args: Vec<(&str, &str)>
 ) -> poise::Command<DataType<T>, ErrType> {
     let mut com = f();
-    com.name = name;
-    com.description = Some(description);
+    com.name = name.to_string();
+    com.description = Some(description.to_string());
     if args.len() != com.parameters.len() {
-        panic!("Erreur : le nombre d’arguments donnés pour la commande {} ne correspond pas au nombre d’arguments réel.", com.name);
+        panic!("Erreur : le nombre d’arguments donnés pour la commande {name} ne correspond pas au nombre d’arguments réel.");
     }
     for i in 0..args.len() {
-        com.parameters[i].name = args[i].0.clone();
-        com.parameters[i].description = Some(args[i].1.clone());
+        com.parameters[i].name = args[i].0.to_string();
+        com.parameters[i].description = Some(args[i].1.to_string());
     }
     com
 }
 
-fn _lister_aux<'a, T: Object, E: Field>(database: &'a HashMap<u64, T>, field: &Option<E>) -> HashSet<&'a u64> {
+fn _lister_aux<'a, T: Object, E: Field<T>>(database: &'a HashMap<u64, T>, field: &Option<E>) -> HashSet<&'a u64> {
     let mut res = Vec::new();
     for e in database {
         if E::comply_with(e.1, field) {
@@ -44,7 +44,7 @@ fn _lister_aux<'a, T: Object, E: Field>(database: &'a HashMap<u64, T>, field: &O
 
 /// Liste tous les objets d’après deux propriétés.
 #[poise::command(slash_command)]
-pub async fn lister_two<T: Object, E1: Field, E2: Field>(
+pub async fn lister_two<T: Object, E1: Field<T>, E2: Field<T>>(
     ctx: Context<'_, DataType<T>, ErrType>,
     field1: Option<E1>,
     field2: Option<E2>
@@ -94,7 +94,7 @@ pub async fn lister_two<T: Object, E1: Field, E2: Field>(
 }
 
 #[poise::command(slash_command)]
-pub async fn change_field<T: Object, F: Field>(ctx: Context<'_, DataType<T>, ErrType>,
+pub async fn change_field<T: Object, F: Field<T>>(ctx: Context<'_, DataType<T>, ErrType>,
                     critere: String,
                     field: F) -> Result<(), ErrType> {
     let bot = &mut ctx.data().lock().await;
