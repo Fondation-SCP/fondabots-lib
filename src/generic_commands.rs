@@ -18,7 +18,7 @@ pub fn gcom<T: Object, F: Fn() -> poise::Command<DataType<T>, ErrType>>(
     com.name = name;
     com.description = Some(description);
     if args.len() != com.parameters.len() {
-        panic!("Erreur : le nombre d’arguments donnés pour la commande {name} ne correspond pas au nombre d’arguments réel.");
+        panic!("Erreur : le nombre d’arguments donnés pour la commande {} ne correspond pas au nombre d’arguments réel.", com.name);
     }
     for i in 0..args.len() {
         com.parameters[i].name = args[i].0.clone();
@@ -102,7 +102,7 @@ pub async fn change_field<T: Object, F: Field>(ctx: Context<'_, DataType<T>, Err
         bot.archive(vec![object_id]);
         let object = bot.database.get_mut(&object_id).unwrap();
         ctx.say(format!("{} de « {} » changé pour « {field} »", F::field_name() ,object.get_name())).await?;
-        F::set_for(object, field);
+        F::set_for(object, &field);
         object.set_modified(true);
     }
     Ok(())
