@@ -6,18 +6,23 @@ use serenity::all::{CreateEmbed, CreateEmbedAuthor, Timestamp};
 use crate::{DataType, ErrType, tools};
 use crate::object::Field;
 use crate::object::Object;
+use crate::tools::get_object;
 
 pub fn gcom<T: Object, F: Fn() -> poise::Command<DataType<T>, ErrType>>(
     f: &F,
     name: String,
     description: String,
-    arg_descriptions: Vec<String>
+    args: Vec<(String, String)>
 ) -> poise::Command<DataType<T>, ErrType> {
     let mut com = f();
     com.name = name;
     com.description = Some(description);
-    for i in 0..arg_descriptions.len() {
-        com.parameters[i].description = Some(arg_descriptions[i].clone());
+    if args.len() != com.parameters.len() {
+        panic!("Erreur : le nombre d’arguments donnés pour la commande {name} ne correspond pas au nombre d’arguments réel.");
+    }
+    for i in 0..args.len() {
+        com.parameters[i].name = args[i].0.clone();
+        com.parameters[i].description = Some(args[i].1.clone());
     }
     com
 }
@@ -85,5 +90,20 @@ pub async fn lister_two<T: Object, E1: Field, E2: Field>(
             .color(73887))).await?;
     }
 
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+pub async fn change_field<T: Object, F: Field>(ctx: Context<'_, DataType<T>, ErrType>,
+                    critere: String,
+                    field: F) -> Result<(), ErrType> {
+    let bot = &mut ctx.data().lock().await;
+    if let Some(object_id) = get_object(&ctx, bot, &critere).await? {
+        bot.archive(vec![object_id]);
+        let object = bot.database.get_mut(&object_id).unwrap();
+        ctx.say(format!("{} de « {} » changé pour « {field} »", F::field_name() ,object.get_name())).await?;
+        F::set_for(object, field);
+        object.set_modified(true);
+    }
     Ok(())
 }

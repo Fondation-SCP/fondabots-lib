@@ -54,4 +54,6 @@ pub trait Object: Send + Sync + 'static + PartialEq + Clone + Debug {
 
 pub trait Field: Eq + ChoiceParameter + Display + Clone + Sync + ArgumentConvert + Send + FromStr {
     fn comply_with<T: Object>(obj: &T, field: &Option<Self>) -> bool;
+    fn set_for<T: Object>(obj: &T, field: &Self);
+    fn field_name() -> String;
 }
