@@ -106,20 +106,15 @@ impl<T: Object> Affichan<T> {
             self.messages.remove(&del);
         }
 
-        for object_id in database.keys() {
-            if !self.messages.contains_key(object_id) && (self.test)(database.get(object_id)) {
-                let object = database.get(object_id).unwrap(); /* Can't have an error here. */
-                self.messages.insert(*object_id, self.chan.get()?.send_message(ctx, object.get_message()).await?);
-            }
+        for (&object_id, object) in tools::sort_by_date(database.iter()
+            .filter(| (id, obj) | {(self.test)(Some(obj)) && !self.messages.contains_key(id)}).collect()) {
+                self.messages.insert(object_id, self.chan.get()?.send_message(ctx, object.get_message()).await?);
         }
         Ok(())
     }
 
     pub async fn purge(&mut self, ctx: &SerenityContext) -> Result<(), ErrType> {
-        for (_, message) in &self.messages {
-            message.delete(ctx).await?;
-        }
-
+        self.refresh(ctx).await?;
         self.messages.clear();
         Ok(())
     }

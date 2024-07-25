@@ -174,13 +174,25 @@ pub async fn up<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
     Ok(())
 }
 
-/// Réinitialise les salons d’affichage.
+/// Réinitialise les messages des salons d’affichage.
 #[poise::command(slash_command, category = "Salons d’affichage")]
 pub async fn refresh_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     let bot = &mut ctx.data().lock().await;
     ctx.defer().await?;
     for affichan in &mut bot.affichans {
         affichan.refresh(ctx.serenity_context()).await?;
+    }
+    ctx.say("Messages des salons d’affichage réinitialisés.").await?;
+    Ok(())
+}
+
+/// Réinitialise les affichans
+#[poise::command(slash_command, category = "Salons d’affichage")]
+pub async fn reset_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
+    let bot = &mut ctx.data().lock().await;
+    ctx.defer().await?;
+    for affichan in &mut bot.affichans {
+        affichan.purge(ctx.serenity_context()).await?;
     }
     ctx.say("Salons d’affichage réinitialisés.").await?;
     Ok(())
