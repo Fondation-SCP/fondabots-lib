@@ -167,7 +167,7 @@ fn _sort_merge<'a, T: Object>(mut a: Vec<(&'a u64, &'a T)>, mut b: Vec<(&'a u64,
     res
 }
 
-pub(crate) fn sort_by_date<'a, T: Object>(v: Vec<(&'a u64, &'a T)>) -> Vec<(&'a u64, &'a T)> {
+pub fn sort_by_date<'a, T: Object>(v: Vec<(&'a u64, &'a T)>) -> Vec<(&'a u64, &'a T)> {
     if v.len() < 1 {
         v
     } else {
