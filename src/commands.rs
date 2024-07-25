@@ -274,5 +274,5 @@ pub async fn delete_commands<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) 
 pub fn command_list<T: Object>() -> Vec<Command<DataType<T>, ErrType>> {
     vec![rechercher(), plop(), supprimer(), annuler(), update_affichans(), renommer(), doublons(),
          up(), refresh_affichans(), bdd(), taille_bdd(), save(), maj(),
-        alias("search", rechercher()), delete_commands()]
+        alias("search", rechercher()), delete_commands(), reset_affichans()]
 }
