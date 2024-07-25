@@ -168,9 +168,9 @@ fn _sort_merge<'a, T: Object>(mut a: Vec<(&'a u64, &'a T)>, mut b: Vec<(&'a u64,
 }
 
 pub fn sort_by_date<'a, T: Object>(v: Vec<(&'a u64, &'a T)>) -> Vec<(&'a u64, &'a T)> {
-    if v.len() < 1 {
+    if v.len() <= 1 {
         v
     } else {
-        _sort_merge(v[..v.len() / 2].to_vec(), v[v.len() / 2..].to_vec())
+        _sort_merge(sort_by_date(v[..v.len() / 2].to_vec()), sort_by_date(v[v.len() / 2..].to_vec()))
     }
 }

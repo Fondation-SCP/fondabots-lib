@@ -107,7 +107,7 @@ impl<T: Object> Affichan<T> {
         }
 
         for (&object_id, object) in tools::sort_by_date(database.iter()
-            .filter(| (id, obj) | {(self.test)(Some(obj)) && !self.messages.contains_key(id)}).collect()) {
+            .filter(| (id, obj) | {(self.test)(Some(obj)) && !self.messages.contains_key(id)}).collect()).into_iter().rev() {
                 self.messages.insert(object_id, self.chan.get()?.send_message(ctx, object.get_message()).await?);
         }
         Ok(())

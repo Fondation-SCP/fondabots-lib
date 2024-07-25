@@ -41,12 +41,10 @@ pub trait Object: Send + Sync + 'static + PartialEq + Clone + Debug {
 
     fn maj_rss(bot: &DataType<Self>) -> impl std::future::Future<Output = Result<(), ErrType>> + Send;
 
-    #[deprecated(since = "1.1.0", note = "Cette méthode devrait être ré-implémentée.")]
     fn get_date(&self) -> &Timestamp {
         unimplemented!("Cette méthode devrait être ré-implémentée.")
     }
 
-    #[deprecated(since = "1.1.0", note = "Cette méthode devrait être ré-implémentée, ne fait rien par défaut.")]
     fn set_date(&mut self, _t: Timestamp) {
         unimplemented!("Cette méthode devrait être ré-implémentée.")
     }

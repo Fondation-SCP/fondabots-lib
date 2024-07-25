@@ -194,6 +194,7 @@ pub async fn reset_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) 
     for affichan in &mut bot.affichans {
         affichan.purge(ctx.serenity_context()).await?;
     }
+    bot.update_affichans(ctx.serenity_context()).await?;
     ctx.say("Salons d’affichage réinitialisés.").await?;
     Ok(())
 }
