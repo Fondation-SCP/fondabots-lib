@@ -1,3 +1,30 @@
+//! Bibliothèque partagée pour les bots Discord de la Fondation SCP.
+//!
+//! Ces bots ont pour fonctionnalité de récupérer des éléments (fils à critiquer, fils staff, pages
+//! à relire…) afin de les afficher dans un salon et de les gérer par des commandes (recherche,
+//! liste par caractéristique…) et des boutons directement dans le salon d’affichage.
+//!
+//! Cette bibliothèque inclut également une fonctionnalité de sauvegarde de la base de données au
+//! format YAML.
+//!
+//! ### Utilisation
+//! Pour utiliser cette bibliothèque, il faut :
+//! * Définir une structure d’objet implémentant [`object::Object`]
+//! * Définir des caractéristiques qui seront des champs de la structure définie plus haut,
+//! implémentant [`object::Field`]
+//! * Définir éventuellement des commandes supplémentaires dont la liste est à donner au bot.
+//!
+//! ### Exemples
+//! Deux exemples principaux d’implémentation de la bibliothèque sont disponibles :
+//! * [Critibot](https://github.com/Fondation-SCP/critibot) – Le bot Discord qui sert à organiser les critiques
+//! * [Staffbot](https://github.com/Fondation-SCP/staffbot) – Le bot Discord qui sert à organiser
+//! les fils du [site staff](https://commandementO5.wikidot.com/).
+//!
+
+//#![deny(missing_docs)]
+#![doc(issue_tracker_base_url = "https://github.com/Fondation-SCP/fondabots-lib/issues/")]
+
+
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs;
@@ -5,19 +32,19 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
-use poise::{Framework, serenity_prelude as serenity};
-use poise::Context;
 use poise::reply::CreateReply;
-use serenity::all::{ButtonStyle, Context as SerenityContext, CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage, GuildChannel, MessageId};
+use poise::Context;
+use poise::{serenity_prelude as serenity, Framework};
+use serenity::all::UserId;
+use serenity::all::{ButtonStyle, Context as SerenityContext, CreateInteractionResponse, CreateInteractionResponseMessage, GuildChannel, MessageId};
 use serenity::all::{ComponentInteraction, CreateButton, GatewayIntents};
 use serenity::all::{CreateActionRow, EditMessage, Interaction};
-use serenity::all::UserId;
 use serenity::client::ClientBuilder;
+use serenity::prelude::*;
 use serenity::CreateEmbed;
 use serenity::FullEvent;
-use serenity::prelude::*;
 use tokio::time;
-use yaml_rust2::{Yaml, yaml, YamlEmitter, YamlLoader};
+use yaml_rust2::{yaml, Yaml, YamlEmitter, YamlLoader};
 
 use affichan::Affichan;
 pub use errors::Error as ErrType;
@@ -32,32 +59,81 @@ pub mod errors;
 pub mod tools;
 pub mod generic_commands;
 pub mod object;
+
+/// Redéfinition du type utilisé pour des données de [`poise`], utilisant un [`Arc`] et un [`Mutex`]
+/// sur [`Bot`] pour lui permettre d’obtenir une référence mutable dans chaque commande si besoin.
+///
+/// `T` doit implémenter [`object::Object`] : il faut garder en tête que ce type n’est qu’un
+/// raccourci vers [`Bot`] qui impose `T: Object`.
 pub type DataType<T> = Arc<Mutex<Bot<T>>>;
 
+/// Structure de données de bot. Cette structure, où `T` est l’implémentation d’un [`object::Object`]
+/// pour le bot souhaité, contient, entre autre, la base de données et les salons d’affichage.
 pub struct Bot<T: Object> {
+    /// Base de données des objets.
+    ///
+    /// Chaque objet doit avoir un identifiant unique qui sera utilisé comme clé dans la [`HashMap`].
     pub database: HashMap<u64, T>,
+    /* Historique utilisé dans Bot::archive et Bot::annuler
+        Il prend la forme d’une pile de vecteurs représentant une modification, contenant
+        des tuples de chaque objet modifié contenant leur identifiant et une option
+        sur les objets. Si cette option est None c’est que l’objet a été crée, et sera donc
+        supprimé en cas d’annulation de l’action. */
     history: VecDeque<Vec<(u64, Option<T>)>>,
+
+    /// Date et heure du dernier écrit récupéré dans les flux RSS. Ce champ est à réutiliser dans
+    /// [`object::Object::maj_rss`] pour éviter de récupérer plusieurs fois le même écrit.
     pub last_rss_update: DateTime<Utc>,
+
+    /* Identifiant du bot. None si le bot n’est pas encore chargé. */
     self_id: Option<UserId>,
+
+    /* Liste des multimessages. L’identifiant est le timestamp de la création des multimessages. */
     multimessages: HashMap<String, Vec<CreateEmbed>>,
+
+    /* Positions actuelle des multimessages, par la même clé. */
     mmpositions: HashMap<String, usize>,
+
+    /* Salons d’affichage */
     affichans: Vec<Affichan<T>>,
+
+    /* Chemin de fichier vers le fichier de sauvegarde */
     data_file: String,
+
+    /* Stockage des salons absolus, c’est-à-dire des salons accessibles dans toute commande. */
     absolute_chans: HashMap<&'static str, GuildChannel>,
+
+    /// Trigger permettant la mise à jour des salons d’affichage à la fin du traitement de l’évènement.
+    ///
+    /// Passer à `true` pour activer la mise à jour (appel à [`Bot::update_affichans`]),
+    /// repassera à `false` après. Ce trigger permet de delayer cette mise à jour afin de ne pas
+    /// bloquer le thread et de ne pas utiliser de `await`.
     pub update_affichans: bool
 }
 
 impl<T: Object> Bot<T> {
+
+    /// Création du bot. Attention, une fois le bot crée, il faudra le lancer par un appel à
+    /// [`serenity::Client::start`] sur le [`Client`] renvoyé.
+    ///
+    /// Les salons « absolus » correspondent à des salons accessibles depuis toutes les
+    /// commandes, qui sont à fournir par un nom et un identifiant.
+    ///
+    /// # Panics
+    /// Cette méthode essaye au maximum de renvoyer ses erreurs, mais panique en cas d’erreur
+    /// dans le chargement du fichier de sauvegarde en YAML pour éviter toute corruption ou
+    /// suppression accidentelle de données.
+    ///
     pub async fn new(
         token: String,
         intents: GatewayIntents,
-        file: &str,
+        savefile_path: &str,
         mut commands: Vec<poise::Command<DataType<T>, ErrType>>,
         affichans: Vec<Affichan<T>>,
         absolute_chans: HashMap<&'static str, u64>
     ) -> Result<Client, ErrType> {
         println!("Lancement du bot.");
-        let data_str = fs::read_to_string(file);
+        let data_str = fs::read_to_string(savefile_path);
         let mut last_update = 0;
         let mut bot = Self {
             database: {
@@ -95,7 +171,7 @@ impl<T: Object> Bot<T> {
             multimessages: HashMap::new(),
             mmpositions: HashMap::new(),
             affichans,
-            data_file: file.to_string(),
+            data_file: savefile_path.to_string(),
             absolute_chans: HashMap::new(),
             update_affichans: false
         };
@@ -188,11 +264,13 @@ impl<T: Object> Bot<T> {
         Ok(ClientBuilder::new(token, intents).framework(framework).await?)
     }
 
+    /// Renvoie une référence vers le salon du nom donné, ou une erreur s’il n’existe pas.
     pub fn get_absolute_chan(&self, name: &'static str) -> Result<&GuildChannel, ErrType> {
         self.absolute_chans.get(name).ok_or(ErrType::ObjectNotFound(format!("Salon absolu {name} inexistant.")))
     }
 
-    pub async fn handle_interaction(&mut self, ctx: &SerenityContext, interaction: &mut ComponentInteraction) -> Result<(), ErrType> {
+    /* Gère les boutons, utilisé dans une closure dans new */
+    async fn handle_interaction(&mut self, ctx: &SerenityContext, interaction: &mut ComponentInteraction) -> Result<(), ErrType> {
         if interaction.data.custom_id.starts_with("mm") {
             let id = interaction.data.custom_id.split("-").next()
                 .ok_or(ErrType::InteractionIDError(interaction.data.custom_id.clone(), interaction.message.id.get()))?.to_string();
@@ -243,6 +321,16 @@ impl<T: Object> Bot<T> {
         Ok(())
     }
 
+    /// Sauvegarde les écrits dont les identifiants sont donnés.
+    ///
+    /// Chaque appel à cette fonction crée une nouvelle entrée dans l’historique qui sera
+    /// restaurée à chaque appel à [`Bot::annuler`]. Si l’historique contient plus de 5 éléments,
+    /// le plus ancien est supprimé.
+    ///
+    /// Cette fonction règle le drapeau `Bot.update_affichans`
+    /// à `true` étant donné que cette fonction doit être systématiquement appelée avant chaque
+    /// modification. Cela permet d’éviter de répéter ces deux associations d’actions qui vont
+    /// ensemble.
     pub fn archive(&mut self, ids: Vec<u64>){
         if !ids.is_empty() {
             if self.history.len() >= 5 {
@@ -258,6 +346,10 @@ impl<T: Object> Bot<T> {
 
     }
 
+    /// Annule la dernière modification, renvie `false` si l’historique est vide.
+    ///
+    /// L’historique ayant une profondeur maximum de 5, il n’est pas possible d’appeler plus de
+    /// cinq fois d’affilée cette méthode.
     pub fn annuler(&mut self) -> bool {
         if let Some(edit) = self.history.pop_front() {
             for (id, ecrit) in edit {
@@ -275,6 +367,7 @@ impl<T: Object> Bot<T> {
         }
     }
 
+    /// Sauvegarde la base de données dans son fichier de sauvegarde, au format YAML.
     pub fn save(&self) -> Result<(), ErrType> {
         let mut objects_out = yaml::Array::new();
         for object_id in self.database.keys() {
@@ -289,6 +382,16 @@ impl<T: Object> Bot<T> {
         Ok(())
     }
 
+    /// Recherche un objet d’après son nom.
+    ///
+    /// La recherche décompose les mots de la chaîne donnée, puis ceux de chaque titre. Si le titre
+    /// contient chaque mot du critère, l’écrit est considéré comme répondant au critère demandé.
+    /// Un mot du critère est considéré contenu dans le titre lorsqu’il est contenu dans un mot du
+    /// titre (et non égal à un mot du titre).
+    ///
+    /// Exemple : Pour le titre « La Fondation SCP », les critères « fonda »,
+    /// « scp » et « fonda scp » seront valides. Par contre, le critère
+    /// « fondations » rejettera ce titre.
     pub fn search(&self, s: &str) -> Vec<&u64> {
         let mut results = Vec::new();
         for object_id in self.database.keys() {
@@ -311,6 +414,7 @@ impl<T: Object> Bot<T> {
         results
     }
 
+    /// Envoie les embeds donnés en paramètre au sein d’un seul message à plusieurs pages.
     pub async fn send_embed(&mut self, ctx: &Context<'_, DataType<T>, ErrType>, embeds: Vec<CreateEmbed>) -> Result<(), ErrType> {
         let id = "mm".to_string() + SystemTime::now().elapsed()?.as_millis().to_string().as_str();
         if embeds.len() > 1 {
@@ -334,6 +438,8 @@ impl<T: Object> Bot<T> {
         Ok(())
     }
 
+    /// Appelle [`affichan::Affichan::update`] pour tous les affichans, et remet le drapeau
+    /// « modifié » des objets à `false` (voir [`object::Object::set_modified`]).
     pub async fn update_affichans(&mut self, ctx: &SerenityContext) -> Result<(), ErrType> {
         for affichan in &mut self.affichans {
             affichan.update(&mut self.database, ctx).await?;
@@ -344,24 +450,18 @@ impl<T: Object> Bot<T> {
         Ok(())
     }
 
-    pub async fn check_deletions(&self, ctx: &SerenityContext, message_id: &MessageId) -> Result<(), ErrType> {
+    /* Fournit l’ID du message supprimé aux salons d’affichage pour éventuellement republier
+       le message supprimé si c’était un message d’affichage. */
+    async fn check_deletions(&self, ctx: &SerenityContext, message_id: &MessageId) -> Result<(), ErrType> {
         for affichan in &self.affichans {
             affichan.check_message_deletion(self, ctx, message_id).await?;
         }
         Ok(())
     }
 
+    /// Copie un template d’embed en y ajoutant le numéro et le contenu des pages.
     #[deprecated(since = "1.1.0", note = "Déplacé à fondabots_lib::tools::get_multimessages")]
     pub fn get_multimessages(pages: Vec<String>, template: CreateEmbed) -> Vec<CreateEmbed> {
-        let mut embeds = Vec::new();
-        let mut counter = 1;
-        let total = pages.len().to_string();
-        for page in &pages {
-            embeds.push(template.clone()
-                .footer(CreateEmbedFooter::new(format!("Page {counter} / {total}")))
-                .description(page));
-            counter += 1;
-        }
-        embeds
+        tools::get_multimessages(pages, template)
     }
 }
