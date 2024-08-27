@@ -3,20 +3,14 @@ use std::collections::{HashMap, HashSet};
 use poise::{Context, CreateReply};
 use serenity::all::{CreateEmbed, CreateEmbedAuthor, Timestamp};
 
-use crate::{DataType, ErrType, tools};
 use crate::object::Field;
 use crate::object::Object;
 use crate::tools::get_object;
+use crate::{tools, DataType, ErrType};
 
-fn _lister_aux<'a, T: Object, E: Field<T>>(database: &'a HashMap<u64, T>, field: &Option<E>) -> HashSet<&'a u64> {
-    let mut res = Vec::new();
-    for e in database {
-        if E::comply_with(e.1, field) {
-            res.push(e);
-        }
-    }
-    res = tools::sort_by_date(res);
-    res.into_iter().map(|(id, _) | {id}).collect()
+fn _lister_one<'a, T: Object, E: Field<T>>(database: &'a HashMap<u64, T>, field: &Option<E>) -> HashSet<&'a u64> {
+    tools::sort_by_date(database.iter().filter(|(_, object)| E::comply_with(object, field)).collect())
+        .into_iter().map(|(id, _) | {id}).collect()
 }
 
 pub async fn lister_two<T: Object, E1: Field<T>, E2: Field<T>>(
@@ -27,24 +21,14 @@ pub async fn lister_two<T: Object, E1: Field<T>, E2: Field<T>>(
     if field1.is_none() && field2.is_none() {
         Err(ErrType::CommandUseError("au moins l’un des deux paramètres doit être spécifié.".to_string()))?;
     }
-    let mut messages = Vec::new();
-    let mut buffer = String::new();
     let bot = &mut ctx.data().lock().await;
     let database = &bot.database;
 
-
-    for objet_id in _lister_aux(database, &field1).intersection(&_lister_aux(database, &field2)) {
-        let objet = database.get(objet_id).unwrap();
-        let to_add = objet.get_list_entry();
-        if buffer.len() + to_add.len() > 1000 {
-            messages.push(buffer);
-            buffer = String::new();
-        }
-        buffer += to_add.as_str();
-    }
-    if !buffer.is_empty() {
-        messages.push(buffer);
-    }
+    let messages = tools::create_paged_list(
+        _lister_one(database, &field1).intersection(&_lister_one(database, &field2)).collect(),
+        |object| database.get(object).unwrap().get_list_entry(),
+        1000
+    );
 
     if messages.is_empty() {
         ctx.send(CreateReply::default().embed(CreateEmbed::new()

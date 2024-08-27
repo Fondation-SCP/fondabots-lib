@@ -1,12 +1,12 @@
-use chrono::{DateTime, NaiveDate, Utc};
-use poise::{Command, Context, CreateReply, serenity_prelude as serenity};
-use serenity::all::{ChannelId, CreateEmbed, CreateEmbedFooter, GuildChannel, Timestamp, User, UserId};
-use serenity::all::Context as SerenityContext;
-
 use crate::{Bot, DataType, ErrType, Object};
+use chrono::{DateTime, NaiveDate, Utc};
+use poise::{serenity_prelude as serenity, Command, Context, CreateReply};
+use serenity::all::Context as SerenityContext;
+use serenity::all::{ChannelId, CreateEmbed, CreateEmbedFooter, GuildChannel, Timestamp, User, UserId};
+use std::future::Future;
 
 pub trait Preloaded<T> {
-    fn load(&self, ctx: &SerenityContext) -> impl std::future::Future<Output = Result<T, ErrType>> + Send;
+    fn load(&self, ctx: &SerenityContext) -> impl Future<Output = Result<T, ErrType>> + Send;
     fn get(&self) -> Result<&T, ErrType>;
     fn get_mut(&mut self) -> Result<&mut T, ErrType>;
 }
@@ -139,19 +139,16 @@ pub fn alias<T: Object>(name: &str, mut com: Command<DataType<T>, ErrType>) -> C
 }
 
 pub fn get_multimessages(pages: Vec<String>, template: CreateEmbed) -> Vec<CreateEmbed> {
-    let mut embeds = Vec::new();
-    let mut counter = 1;
+    let mut counter = 0;
     let total = pages.len().to_string();
-    for page in &pages {
-        embeds.push(template.clone()
-            .footer(CreateEmbedFooter::new(format!("Page {counter} / {total}")))
-            .description(page));
+    pages.into_iter().map(|page| {
         counter += 1;
-    }
-    embeds
+        template.clone()
+            .footer(CreateEmbedFooter::new(format!("Page {counter} / {total}")))
+            .description(page)
+    }).collect()
 }
 
-#[allow(deprecated)] /* TODO allow à supprimer en 2.0.0 */
 fn _sort_merge<'a, T: Object>(mut a: Vec<(&'a u64, &'a T)>, mut b: Vec<(&'a u64, &'a T)>) -> Vec<(&'a u64, &'a T)> {
     let mut res = Vec::new();
     while !(a.is_empty() && b.is_empty()) {
@@ -172,5 +169,26 @@ pub fn sort_by_date<'a, T: Object>(v: Vec<(&'a u64, &'a T)>) -> Vec<(&'a u64, &'
         v
     } else {
         _sort_merge(sort_by_date(v[..v.len() / 2].to_vec()), sort_by_date(v[v.len() / 2..].to_vec()))
+    }
+}
+
+pub fn create_paged_list<T, F: FnMut(&T) -> String>(mut objects: Vec<T>, mut string_func: F, char_limit: i32) -> Vec<String> {
+    match objects.pop() {
+        Some(obj) => {
+            let obj_str = string_func(&obj);
+            let mut rec = create_paged_list(objects, string_func, char_limit);
+            if rec.is_empty() {
+                vec![obj_str]
+            } else {
+                if rec.last().unwrap().len() + obj_str.len() > 1000 {
+                    rec.push(obj_str);
+                } else {
+                    let last_str = rec.pop().unwrap();
+                    rec.push(last_str + obj_str.as_str());
+                }
+                rec
+            }
+        },
+        None => vec![]
     }
 }

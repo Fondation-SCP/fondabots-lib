@@ -40,18 +40,18 @@ use serenity::all::{ButtonStyle, Context as SerenityContext, CreateInteractionRe
 use serenity::all::{ComponentInteraction, CreateButton, GatewayIntents};
 use serenity::all::{CreateActionRow, EditMessage, Interaction};
 use serenity::client::ClientBuilder;
+use serenity::futures::future::try_join_all;
 use serenity::prelude::*;
 use serenity::CreateEmbed;
 use serenity::FullEvent;
 use tokio::time;
 use yaml_rust2::{yaml, Yaml, YamlEmitter, YamlLoader};
 
+use crate::tools::basicize;
 use affichan::Affichan;
 pub use errors::Error as ErrType;
 #[deprecated(since = "1.1.0", note = "Utiliser fondabots_lib::object::Object")]
 pub use object::Object;
-
-use crate::tools::basicize;
 
 pub mod affichan;
 mod commands;
@@ -141,24 +141,19 @@ impl<T: Object> Bot<T> {
                     println!("Chargement des données.");
                     let data = &YamlLoader::load_from_str(s.as_str())?[0];
                     last_update = data["last_rss_update"].as_i64().unwrap_or(0);
-                    let mut ret = HashMap::new();
-                    let entries = data["entries"].as_vec()
-                        .ok_or(ErrType::YamlParseError("Dans les données, entries n’est pas un tableau.".to_string()))?;
-                    for entry in entries {
-                        match T::from_yaml(entry) {
-                            Ok(obj) => {ret.insert(obj.get_id(), obj);}
+                    data["entries"].as_vec()
+                        .ok_or(ErrType::YamlParseError("Dans les données, entries n’est pas un tableau.".to_string()))?
+                        .iter().map(|entry| match T::from_yaml(entry) {
+                            Ok(obj) => (obj.get_id(), obj),
                             Err(e) => {
                                 let mut debug_out = String::new();
                                 let mut debug_emitter = YamlEmitter::new(&mut debug_out);
                                 debug_emitter.compact(false);
                                 debug_emitter.multiline_strings(true);
-                                debug_emitter.dump(entry)?;
+                                let _ = debug_emitter.dump(entry);
                                 panic!("Erreur de chargement ({e}) dans le yaml suivant: {debug_out}")
                             }
-                        }
-
-                    }
-                    ret
+                        }).collect()
                 } else {
                     println!("Pas de base de donnée trouvée : création d’une nouvelle.");
                     HashMap::new()
@@ -224,24 +219,20 @@ impl<T: Object> Bot<T> {
                     println!("Récupération de l’identifiant.");
                     bot.self_id = Some(ready.user.id);
                     println!("Chargement des salons d’affichage.");
-                    for affichan in &mut bot.affichans {
-                        affichan.init(&mut bot.database, &bot.self_id.unwrap(), ctx).await?;
-                    }
+                    try_join_all(bot.affichans.iter_mut().map(
+                        |affichan| affichan.init(&bot.database, bot.self_id.as_ref().unwrap(), ctx)))
+                        .await?;
                     println!("Chargement des salons absolus.");
-                    for (name, chan_id) in absolute_chans {
-                        match serenity::ChannelId::new(chan_id).to_channel(ctx).await {
-                            Ok(chan) => {
-                                bot.absolute_chans.insert(name, try_loop!(chan.guild()
-                                .ok_or(ErrType::NoneError), "Salon absolu n’est pas un salon de serveur."));
-                            },
-                            Err(e) => {
-                                eprintln!("Erreur dans le chargement du salon absolu {name} : {e}");
-                                continue;
+
+                    bot.absolute_chans = try_join_all(absolute_chans.iter().map(|(&name, chan_id)| {
+                        async move {
+                            match serenity::ChannelId::new(*chan_id).to_channel(ctx).await {
+                                Ok(chan) => Ok((name, chan.guild().unwrap())),
+                                Err(e) => Err(e)
                             }
                         }
-                        println!("Salon {name} chargé.");
+                    })).await.unwrap().into_iter().collect();
 
-                    }
                     let bot_mutex = Arc::new(Mutex::new(bot));
                     let bot_mutex_2 = bot_mutex.clone();
                     println!("Démarrage du thread RSS.");
@@ -352,14 +343,15 @@ impl<T: Object> Bot<T> {
     /// cinq fois d’affilée cette méthode.
     pub fn annuler(&mut self) -> bool {
         if let Some(edit) = self.history.pop_front() {
-            for (id, ecrit) in edit {
-                if let Some(ecrit) = ecrit {
-                    self.database.insert(id, ecrit);
+            edit.iter().for_each(|(id, ecrit)| match ecrit {
+                Some(e) => {
+                    self.database.insert(*id, e.clone());
                     self.database.get_mut(&id).unwrap().set_modified(true);
-                } else {
+                }
+                None => {
                     self.database.remove(&id);
                 }
-            }
+            });
             self.update_affichans = true;
             true
         } else {
@@ -369,10 +361,7 @@ impl<T: Object> Bot<T> {
 
     /// Sauvegarde la base de données dans son fichier de sauvegarde, au format YAML.
     pub fn save(&self) -> Result<(), ErrType> {
-        let mut objects_out = yaml::Array::new();
-        for object_id in self.database.keys() {
-            objects_out.push(self.database.get(object_id).unwrap().serialize());
-        }
+        let objects_out: Vec<Yaml> = self.database.iter().map(|(_, object)| object.serialize()).collect();
         let mut yaml_out = yaml::Hash::new();
         yaml_out.insert(Yaml::String("entries".into()), Yaml::Array(objects_out));
         yaml_out.insert(Yaml::String("last_rss_update".into()), Yaml::Integer(self.last_rss_update.timestamp()));
@@ -392,26 +381,13 @@ impl<T: Object> Bot<T> {
     /// Exemple : Pour le titre « La Fondation SCP », les critères « fonda »,
     /// « scp » et « fonda scp » seront valides. Par contre, le critère
     /// « fondations » rejettera ce titre.
-    pub fn search(&self, s: &str) -> Vec<&u64> {
-        let mut results = Vec::new();
-        for object_id in self.database.keys() {
-            let mut ok = true;
-            for mot_s in s.split(" ") {
-                let mut found = false;
-                for mot in self.database.get(object_id).unwrap().get_name().split(" ") {
-                    found = found || basicize(mot).contains(&basicize(mot_s));
-                }
-                if !found {
-                    ok = false;
-                    break;
-                }
-            }
-            if ok {
-                results.push(object_id);
-            }
-
-        }
-        results
+    pub fn search(&self, critere: &str) -> Vec<&u64> {
+        self.database.iter().filter(|(_, object)|
+             critere.split(" ").fold(false, |corresponds, mot_critere| {
+                 corresponds || object.get_name().split(" ")
+                     .fold(false, |found, mot_objet| found || basicize(mot_objet).contains(&basicize(mot_critere)))
+             })
+        ).map(|(object_id, _)| object_id).collect()
     }
 
     /// Envoie les embeds donnés en paramètre au sein d’un seul message à plusieurs pages.
@@ -441,21 +417,16 @@ impl<T: Object> Bot<T> {
     /// Appelle [`affichan::Affichan::update`] pour tous les affichans, et remet le drapeau
     /// « modifié » des objets à `false` (voir [`object::Object::set_modified`]).
     pub async fn update_affichans(&mut self, ctx: &SerenityContext) -> Result<(), ErrType> {
-        for affichan in &mut self.affichans {
-            affichan.update(&mut self.database, ctx).await?;
-        }
-        for (_, ecrit) in &mut self.database {
-            ecrit.set_modified(false);
-        }
+        try_join_all(self.affichans.iter_mut().map(|affichan| affichan.update(&self.database, ctx))).await?;
+        self.database.iter_mut().for_each(|(_, ecrit)| ecrit.set_modified(false));
         Ok(())
     }
 
     /* Fournit l’ID du message supprimé aux salons d’affichage pour éventuellement republier
        le message supprimé si c’était un message d’affichage. */
     async fn check_deletions(&self, ctx: &SerenityContext, message_id: &MessageId) -> Result<(), ErrType> {
-        for affichan in &self.affichans {
-            affichan.check_message_deletion(self, ctx, message_id).await?;
-        }
+        try_join_all(self.affichans.iter().map(
+            |affichan| affichan.check_message_deletion(self, ctx, message_id))).await?;
         Ok(())
     }
 

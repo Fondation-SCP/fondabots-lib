@@ -1,16 +1,15 @@
-use std::collections::HashMap;
-
-use serenity::all::{ChannelId, GetMessages, MessageId, UserId};
+use errors::Error;
 use serenity::all::Context as SerenityContext;
 use serenity::all::Message;
-
-use errors::Error;
+use serenity::all::{ChannelId, GetMessages, MessageId, UserId};
+use serenity::futures::future::{join_all, try_join_all};
+use std::collections::HashMap;
 use tools::PreloadedChannel;
 
-use crate::{errors, Object, tools};
+use crate::tools::Preloaded;
 use crate::Bot;
 use crate::ErrType;
-use crate::tools::Preloaded;
+use crate::{errors, tools, Object};
 
 /* Attention: le test doit gérer les erreurs seul, il est possible que l’écrit n’existe pas. */
 pub struct Affichan<T: Object> {
@@ -37,7 +36,7 @@ impl<T: Object> Affichan<T> {
         Ok(())
     }
 
-    pub async fn init(&mut self, database: &mut HashMap<u64, T>, self_id: &UserId, ctx: &SerenityContext) -> Result<(), ErrType> {
+    pub async fn init(&mut self, database: &HashMap<u64, T>, self_id: &UserId, ctx: &SerenityContext) -> Result<(), ErrType> {
         self.load(ctx).await?;
         let mut messages = self.chan.get()?.messages(ctx, GetMessages::new().limit(100)).await?;
         while !messages.is_empty() {
@@ -85,31 +84,56 @@ impl<T: Object> Affichan<T> {
         self.update(database, ctx).await
     }
 
-    pub async fn update(&mut self, database: &mut HashMap<u64, T>, ctx: &SerenityContext) -> Result<(), ErrType> {
-        let mut to_del = Vec::new();
-        for (object_id, message) in &mut self.messages {
-            if if !(database.contains_key(object_id) && (self.test)(database.get(object_id))) {
-                to_del.push(object_id.clone());
-                message.delete(ctx).await
+    pub async fn update(&mut self, database: &HashMap<u64, T>, ctx: &SerenityContext) -> Result<(), ErrType> {
+        vec![
+            /* Messages qui ne correspondent plus au test ou ne sont plus dans la base de données */
+            join_all(self.messages.iter_mut().filter(|(object_id, _)|
+                !(database.contains_key(object_id) && (self.test)(database.get(object_id)))
+            ).map(|(object_id, message)| async {
+                let _ = message.delete(ctx).await; *object_id
+            })).await,
 
-            } else if database.get(object_id).unwrap() /* Error impossible due to previous condition */.is_modified() {
-                message.edit(ctx, database.get(object_id).unwrap().get_message_edit()).await
-            } else {
-                Ok(())
-            }.is_err() {
-                eprintln!("Message {} invalide trouvé dans l’affichan {}. Suppression.", message.id.get(), self.chan.get()?.name);
-                to_del.push(object_id.clone());
-            }
-        }
+            /* Messages dont la modification a échoué */
+            join_all(self.messages.iter_mut().filter(|(object_id, _)|
+                /* Condition excluant les objes déjà traités au-dessus et s’assurant que
+                   get(object_id) ne retournera pas None */
+                if database.contains_key(object_id) && (self.test)(database.get(object_id)) {
+                    database.get(object_id).unwrap().is_modified()
+                } else {
+                    false
+                }
+            ).map(|(object_id, message)| async {
+                if message.edit(ctx, database.get(object_id).unwrap().get_message_edit()).await.is_err() {
+                    Some(*object_id)
+                } else {
+                    None
+                }
+            })).await.into_iter().filter_map(|x| x).collect()
+        ].concat().iter().for_each(|id| {
+            self.messages.remove(id);
+        });
 
-        for del in to_del {
-            self.messages.remove(&del);
-        }
+        let self_chan = &self.chan;
 
-        for (&object_id, object) in tools::sort_by_date(database.iter()
-            .filter(| (id, obj) | {(self.test)(Some(obj)) && !self.messages.contains_key(id)}).collect()).into_iter().rev() {
-                self.messages.insert(object_id, self.chan.get()?.send_message(ctx, object.get_message()).await?);
-        }
+        try_join_all(
+            tools::sort_by_date(
+                database.iter()
+                .filter(| (id, obj) |
+                    (self.test)(Some(obj)) && !self.messages.contains_key(id)
+                ).collect()
+            ).into_iter().rev().map(|(object_id, object)| async move {
+                match self_chan.get() {
+                    Ok(chan) => match chan.send_message(ctx, object.get_message()).await {
+                        Ok(message) => Ok((object_id, message)),
+                        Err(e) => Err(ErrType::LibError(Box::new(e)))
+                    }
+                    Err(e) => Err(e)
+                }
+            })
+        ).await?.into_iter().for_each(|(&object_id, message)| {
+            self.messages.insert(object_id, message);
+        });
+
         Ok(())
     }
 
@@ -120,22 +144,24 @@ impl<T: Object> Affichan<T> {
     }
 
     pub async fn refresh(&mut self, ctx: &SerenityContext) -> Result<(), ErrType> {
-        for (_, message) in &mut self.messages {
-            message.delete(ctx).await?;
-        }
+        try_join_all(self.messages.iter_mut().map(|(_, message)| message.delete(ctx))).await?;
         Ok(())
     }
 
     pub async fn check_message_deletion(&self, bot: &Bot<T>, ctx: &SerenityContext, message_id: &MessageId) -> Result<(), ErrType> {
-        for (object_id, message) in &self.messages {
-            if message.id.get() == message_id.get() {
-                self.chan.get()?.send_message(ctx, bot.database.get(object_id)
-                    .ok_or(Error::ObjectNotFound(format!("Objet {object_id} référencé dans un message supprimé dans Affichan {} (id: {})",
-                        self.chan.get()?.name, self.chan.get()?.id)))?
-                    .get_message()).await?;
-                break; /* Seul un message identique peut exister */
-            }
-        }
+        try_join_all(
+            self.messages.iter().filter(|(_, message)| message.id.get() == message_id.get())
+                /* Ne peut trouver qu’un seul résultat, mais on fait comme si quand-même */
+                .map(|(object_id, _)| async {
+                    match self.chan.get() {
+                        Ok(chan) => match bot.database.get(object_id) {
+                            Some(object) => chan.send_message(ctx, object.get_message()).await.or_else(|err| Err(Error::LibError(Box::new(err)))),
+                            None => Err(Error::ObjectNotFound(format!("Objet {} référencé dans un message supprimé dans Affichan {} (id: {})", *object_id, chan.name, chan.id)))
+                        }
+                        Err(e) => Err(e)
+                    }
+                })
+        ).await?;
         Ok(())
     }
 
@@ -159,16 +185,16 @@ impl<T: Object> Affichan<T> {
     }
 
     pub async fn edit_all(&mut self, bot: &Bot<T>, ctx: &SerenityContext) -> Result<(), ErrType> {
-        for (object_id, message) in &mut self.messages {
-            if let Some(object) = bot.database.get(object_id) {
-                message.edit(ctx, object.get_message_edit()).await?;
-            } else {
-                eprintln!("Écrit {object_id} présent dans Affichan {} (id: {}) mais absent de la base de données.",
-                    self.chan.get()?.name, self.chan.get()?.id);
-                continue;
-            }
-        }
+        try_join_all(
+            self.messages.iter_mut().filter_map(|(object_id, message)| bot.database.get(object_id)
+                .map_or_else(|| None, |object| Some((object, message))))
+            .map(|(object, message)| message.edit(ctx, object.get_message_edit()))
+        ).await?;
         Ok(())
+    }
+
+    pub fn contains_object(&self, object_id: &u64) -> bool {
+        self.messages.contains_key(object_id)
     }
 
 }

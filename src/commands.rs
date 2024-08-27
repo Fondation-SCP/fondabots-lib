@@ -1,16 +1,16 @@
-use poise::{CreateReply, serenity_prelude as serenity};
-use poise::Command;
-use poise::Context;
-use serenity::all::{CreateEmbed, CreateEmbedAuthor, Timestamp};
-use serenity::all::CreateAttachment;
-
 use crate::tools::alias;
 use crate::tools::get_object;
+use poise::Command;
+use poise::Context;
+use poise::{serenity_prelude as serenity, CreateReply};
+use serenity::all::CreateAttachment;
+use serenity::all::{CreateEmbed, CreateEmbedAuthor, Timestamp};
+use serenity::futures::future::try_join_all;
 
+use super::tools;
 use super::DataType;
 use super::ErrType;
 use super::Object;
-use super::tools;
 
 pub fn aucun_resultat(recherche: &str) -> CreateEmbed {
     CreateEmbed::new()
@@ -34,25 +34,15 @@ pub async fn rechercher<T: Object>(
     let res = bot.search(critere.as_str());
     if res.len() <= 3 && !res.is_empty() {
         ctx.defer().await?;
-        for id in res {
-            let object = bot.database.get(&id).unwrap();
-            ctx.send(object.get_reply()).await?;
-        }
+        try_join_all(
+            res.into_iter().map(|id| ctx.send(bot.database.get(&id).unwrap().get_reply()))
+        ).await?;
     } else if res.is_empty() {
         ctx.send(CreateReply::default().embed(aucun_resultat(critere.as_str()))).await?;
     } else {
-        let mut messages = Vec::new();
-        let mut buffer = String::new();
-        for id in res {
-            let object = bot.database.get(&id).unwrap();
-            let to_add = object.get_list_entry();
-            if buffer.len() + to_add.len() > 1000 {
-                messages.push(buffer);
-                buffer = String::new();
-            }
-            buffer += to_add.as_str();
-        }
-        messages.push(buffer);
+        let messages = tools::create_paged_list(res, |id|
+            bot.database.get(id).unwrap().get_list_entry(),
+        1000);
         bot.send_embed(&ctx, tools::get_multimessages(messages, CreateEmbed::new()
             .title("Résultatss de la recherche")
             .author(CreateEmbedAuthor::new(format!("Recherche : {critere}")))
@@ -130,20 +120,20 @@ pub async fn renommer<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
 pub async fn doublons<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     ctx.defer().await?;
     let bot = &mut ctx.data().lock().await;
-    let mut noms_presents = Vec::new();
-    let mut id_to_delete = Vec::new();
-    for (id, object) in &bot.database {
-        if noms_presents.contains(&object.get_name()) {
-            id_to_delete.push(*id);
+    let database = &mut bot.database;
+    let (_, doublons) = database.iter().fold((Vec::new(), Vec::new()), |(names, to_del), (object_id, object)| {
+        if names.contains(&object.get_name()) {
+            (names, vec![to_del, vec![*object_id]].concat())
         } else {
-            noms_presents.push(object.get_name());
+            (vec![names, vec![object.get_name()]].concat(), to_del)
         }
-    }
-    let nb_deleted = id_to_delete.len();
-    bot.archive(id_to_delete.clone());
-    for id in id_to_delete {
-        bot.database.remove(&id);
-    }
+    });
+    let nb_deleted = doublons.len();
+    bot.archive(doublons.clone());
+    /* Réemprunt après archive */
+    let database = &mut bot.database;
+    doublons.iter().for_each(|doublon| {database.remove(&doublon);});
+
     ctx.send(CreateReply::default()
         .content(if nb_deleted == 0 {
             format!("Aucun doublon trouvé.")
@@ -160,12 +150,10 @@ pub async fn up<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
     #[description = "Critère d’identification de l’objet."] critere: String) -> Result<(), ErrType> {
     let bot = &mut ctx.data().lock().await;
     if let Some(object_id) = get_object(&ctx, bot, &critere).await? {
-        for affichan in &bot.affichans {
-            match affichan.up(ctx.serenity_context(), &object_id).await {
-                Err(ErrType::ObjectNotFound(_)) | Ok(_) => (), /* Osef si l’objet n’est pas dans un des affichans */
-                error => return error
-            }
-        }
+        try_join_all(bot.affichans.iter()
+            .filter(|affichan| affichan.contains_object(&object_id))
+            .map(|affichan| affichan.up(ctx.serenity_context(), &object_id))
+        ).await?;
         bot.archive(vec![object_id]);
         bot.database.get_mut(&object_id).unwrap().up();
         ctx.say(format!("Objet {} up !", bot.database.get(&object_id).unwrap().get_name())).await?;
@@ -179,9 +167,7 @@ pub async fn up<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
 pub async fn refresh_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     let bot = &mut ctx.data().lock().await;
     ctx.defer().await?;
-    for affichan in &mut bot.affichans {
-        affichan.refresh(ctx.serenity_context()).await?;
-    }
+    try_join_all(bot.affichans.iter_mut().map(|affichan| affichan.refresh(ctx.serenity_context()))).await?;
     ctx.say("Messages des salons d’affichage réinitialisés.").await?;
     Ok(())
 }
@@ -191,9 +177,7 @@ pub async fn refresh_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>
 pub async fn reset_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     let bot = &mut ctx.data().lock().await;
     ctx.defer().await?;
-    for affichan in &mut bot.affichans {
-        affichan.purge(ctx.serenity_context()).await?;
-    }
+    try_join_all(bot.affichans.iter_mut().map(|affichan| affichan.purge(ctx.serenity_context()))).await?;
     bot.update_affichans(ctx.serenity_context()).await?;
     ctx.say("Salons d’affichage réinitialisés.").await?;
     Ok(())
@@ -247,23 +231,21 @@ pub async fn delete_commands<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) 
     // Fetch global commands
     let global_commands = serenity_ctx.http.get_global_commands().await?;
 
-    // Delete each global command
-    for command in global_commands {
+    try_join_all(global_commands.into_iter().map(|command| {
         println!("Suppression de la commande {}", command.name);
-        serenity_ctx.http.delete_global_command(command.id).await?;
-    }
+        serenity_ctx.http.delete_global_command(command.id)
+    })).await?;
 
     // Fetch the guilds the bot is a part of
     let guilds = serenity_ctx.http.get_guilds(None, None).await?;
-
-    // Delete guild-specific commands
-    for guild in guilds {
-        let guild_commands = serenity_ctx.http.get_guild_commands(guild.id).await?;
-        for command in guild_commands {
-            println!("Suppression de la commande de serveur {}", command.name);
-            serenity_ctx.http.delete_guild_command(guild.id, command.id).await?;
-        }
-    }
+    try_join_all(
+        try_join_all(
+            guilds.into_iter().map(|guild| serenity_ctx.http.get_guild_commands(guild.id))
+        ).await?.concat().into_iter().map(|guild_command| {
+            println!("Suppression de la commande de serveur {}", guild_command.name);
+            serenity_ctx.http.delete_guild_command(guild_command.guild_id.unwrap(), guild_command.id)
+        })
+    ).await?;
 
     ctx.say("Commandes du bot supprimées. Le bot va désormais s’éteindre.").await?;
     panic!("Commande delete_commands terminée.")
