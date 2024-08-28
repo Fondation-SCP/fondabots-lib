@@ -5,6 +5,7 @@ use serenity::all::{ChannelId, GetMessages, MessageId, UserId};
 use serenity::futures::future::{join_all, try_join_all};
 use std::collections::HashMap;
 use tools::PreloadedChannel;
+use yaml_rust2::{yaml, Yaml};
 
 use crate::tools::Preloaded;
 use crate::Bot;
@@ -36,51 +37,83 @@ impl<T: Object> Affichan<T> {
         Ok(())
     }
 
-    pub async fn init(&mut self, database: &HashMap<u64, T>, self_id: &UserId, ctx: &SerenityContext) -> Result<(), ErrType> {
+    pub fn save(&self) -> Yaml {
+        Yaml::Array(self.messages.iter().map(|(&object_id, message)| {
+            let mut out = yaml::Hash::new();
+            out.insert(Yaml::String("id".to_string()), Yaml::Integer(object_id as i64));
+            out.insert(Yaml::String("message_id".to_string()), Yaml::Integer(message.id.get() as i64));
+            Yaml::Hash(out)
+        }).collect())
+    }
+
+    pub async fn init(&mut self, database: &HashMap<u64, T>, self_id: &UserId, saved_data: Option<&Yaml>, ctx: &SerenityContext) -> Result<(), ErrType> {
         self.load(ctx).await?;
-        let mut messages = self.chan.get()?.messages(ctx, GetMessages::new().limit(100)).await?;
-        while !messages.is_empty() {
-            let last_message_id = messages.last().unwrap().id.get(); // The loop makes None impossible
-            while !messages.is_empty() {
-                let message = messages.pop().unwrap(); // The loop makes None impossible
-                if message.author.id.get() != self_id.get() || message.embeds.is_empty() {
-                    continue;
-                }
 
-                let embed_footer = match &message.embeds.get(0).ok_or(Error::Generic)?.footer {
-                    Some(footer) => footer,
-                    None => {
-                        eprintln!("Embed sans footer: message {} ignoré.", message.id);
-                        continue;
-                    }
-                };
-
-                let footer_text = match embed_footer.text.parse() {
-                    Ok(n) => n,
-                    Err(e) => {
-                        eprintln!("{e}: message {} ignoré.", message.id);
-                        continue;
-                    }
-                };
-
-                if let Some(object) = database.get(&footer_text) {
-                    if !self.messages.contains_key(&object.get_id()) {
-                        self.messages.insert(object.get_id(), message);
-                    } else {
-                        eprintln!("Message {} en trop: suppression.", message.id);
-                        message.delete(ctx).await?;
-                    }
-                } else {
-                    message.delete(ctx).await?;
-                    eprintln!("Message {} sans objet associé: message supprimé.", message.id);
-                    continue;
-                }
-
-
+        match saved_data {
+            Some(saved_data) => {
+                self.messages = try_join_all(saved_data.as_vec().ok_or(ErrType::YamlParseError("Erreur de yaml dans les affichans: pas un tableau.".to_string()))?
+                    .into_iter().map(|yaml_message| async { match yaml_message.as_hash() {
+                    Some(_) => {
+                        let object_id = yaml_message["id"].as_i64();
+                        let message_id = yaml_message["message_id"].as_i64();
+                        if object_id.is_none() || message_id.is_none() {
+                            Err(ErrType::YamlParseError("Erreur de yaml dans un affichan: un identifiant n’est pas un entier.".into()))
+                        } else {
+                            match self.chan.get().unwrap().message(ctx, MessageId::new(message_id.unwrap() as u64)).await {
+                                Ok(message) => Ok((object_id.unwrap() as u64, message)),
+                                Err(e) => Err(ErrType::LibError(Box::new(e)))
+                            }
+                        }
+                    },
+                    None => Err(ErrType::YamlParseError("Erreur de yaml dans un affichan: l’une des entrées n’est pas un dictionnaire.".into()))
+                }}
+                )).await?.into_iter().collect();
             }
-            messages = self.chan.get()?.messages(ctx, GetMessages::new().limit(100).before(last_message_id)).await?;
-        }
+            None => {
+                let mut messages = self.chan.get()?.messages(ctx, GetMessages::new().limit(100)).await?;
+                while !messages.is_empty() {
+                    let last_message_id = messages.last().unwrap().id.get(); // The loop makes None impossible
+                    while !messages.is_empty() {
+                        let message = messages.pop().unwrap(); // The loop makes None impossible
+                        if message.author.id.get() != self_id.get() || message.embeds.is_empty() {
+                            continue;
+                        }
 
+                        let embed_footer = match &message.embeds.get(0).ok_or(Error::Generic)?.footer {
+                            Some(footer) => footer,
+                            None => {
+                                eprintln!("Embed sans footer: message {} ignoré.", message.id);
+                                continue;
+                            }
+                        };
+
+                        let footer_text = match embed_footer.text.parse() {
+                            Ok(n) => n,
+                            Err(e) => {
+                                eprintln!("{e}: message {} ignoré.", message.id);
+                                continue;
+                            }
+                        };
+
+                        if let Some(object) = database.get(&footer_text) {
+                            if !self.messages.contains_key(&object.get_id()) {
+                                self.messages.insert(object.get_id(), message);
+                            } else {
+                                eprintln!("Message {} en trop: suppression.", message.id);
+                                message.delete(ctx).await?;
+                            }
+                        } else {
+                            message.delete(ctx).await?;
+                            eprintln!("Message {} sans objet associé: message supprimé.", message.id);
+                            continue;
+                        }
+
+
+                    }
+                    messages = self.chan.get()?.messages(ctx, GetMessages::new().limit(100).before(last_message_id)).await?;
+                }
+            }
+        }
         self.update(database, ctx).await
     }
 
@@ -195,6 +228,13 @@ impl<T: Object> Affichan<T> {
 
     pub fn contains_object(&self, object_id: &u64) -> bool {
         self.messages.contains_key(object_id)
+    }
+
+    pub fn get_chan_id(&self) -> u64 {
+        match &self.chan {
+            PreloadedChannel::Loaded(guild_channel) => &guild_channel.id,
+            PreloadedChannel::Unloaded(channel_id) => channel_id
+        }.get()
     }
 
 }

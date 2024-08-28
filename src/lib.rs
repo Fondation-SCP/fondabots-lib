@@ -134,12 +134,14 @@ impl<T: Object> Bot<T> {
     ) -> Result<Client, ErrType> {
         println!("Lancement du bot.");
         let data_str = fs::read_to_string(savefile_path);
+        let data = data_str.map_or(None, |s| YamlLoader::load_from_str(s.as_str()).ok());
         let mut last_update = 0;
+
         let mut bot = Self {
             database: {
-                if let Ok(s) = data_str {
+                if let Some(data) = &data {
                     println!("Chargement des données.");
-                    let data = &YamlLoader::load_from_str(s.as_str())?[0];
+                    let data = &data[0];
                     last_update = data["last_rss_update"].as_i64().unwrap_or(0);
                     data["entries"].as_vec()
                         .ok_or(ErrType::YamlParseError("Dans les données, entries n’est pas un tableau.".to_string()))?
@@ -219,9 +221,18 @@ impl<T: Object> Bot<T> {
                     println!("Récupération de l’identifiant.");
                     bot.self_id = Some(ready.user.id);
                     println!("Chargement des salons d’affichage.");
+                    let affichans_data = if let Some(data) = &data {
+                        Some(&data[0]["affichans"])
+                    } else {None};
                     try_join_all(bot.affichans.iter_mut().map(
-                        |affichan| affichan.init(&bot.database, bot.self_id.as_ref().unwrap(), ctx)))
-                        .await?;
+                        |affichan| {
+                            /* Ok, ça c’est monstrueux mais je la flemme de trouver quelque chose de plus élégant. */
+                            let affichan_data = affichans_data.map(|affichans_data|
+                                affichans_data.as_hash().map(|affichans_data|
+                                    affichans_data.get(&Yaml::Integer(affichan.get_chan_id() as i64))
+                                )).flatten().flatten();
+                            affichan.init(&bot.database, bot.self_id.as_ref().unwrap(), affichan_data, ctx)
+                        })).await?;
                     println!("Chargement des salons absolus.");
 
                     bot.absolute_chans = try_join_all(absolute_chans.iter().map(|(&name, chan_id)| {
@@ -362,9 +373,15 @@ impl<T: Object> Bot<T> {
     /// Sauvegarde la base de données dans son fichier de sauvegarde, au format YAML.
     pub fn save(&self) -> Result<(), ErrType> {
         let objects_out: Vec<Yaml> = self.database.iter().map(|(_, object)| object.serialize()).collect();
+        let affichans_out =
+            self.affichans.iter().map(|affichan| {(
+                Yaml::Integer(affichan.get_chan_id() as i64),
+                affichan.save()
+            )}).collect();
         let mut yaml_out = yaml::Hash::new();
         yaml_out.insert(Yaml::String("entries".into()), Yaml::Array(objects_out));
         yaml_out.insert(Yaml::String("last_rss_update".into()), Yaml::Integer(self.last_rss_update.timestamp()));
+        yaml_out.insert(Yaml::String("affichans".into()), Yaml::Hash(affichans_out));
         let mut out_str = String::new();
         YamlEmitter::new(&mut out_str).dump(&Yaml::Hash(yaml_out))?;
         fs::write(&self.data_file, &out_str)?;
