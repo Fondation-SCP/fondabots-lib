@@ -1,7 +1,7 @@
 use errors::Error;
 use serenity::all::Context as SerenityContext;
 use serenity::all::Message;
-use serenity::all::{ChannelId, GetMessages, MessageId, UserId};
+use serenity::all::{ChannelId, MessageId, UserId};
 use serenity::futures::future::{join_all, try_join_all};
 use std::collections::HashMap;
 use tools::PreloadedChannel;
@@ -70,48 +70,33 @@ impl<T: Object> Affichan<T> {
                 )).await?.into_iter().collect();
             }
             None => {
-                let mut messages = self.chan.get()?.messages(ctx, GetMessages::new().limit(100)).await?;
-                while !messages.is_empty() {
-                    let last_message_id = messages.last().unwrap().id.get(); // The loop makes None impossible
-                    while !messages.is_empty() {
-                        let message = messages.pop().unwrap(); // The loop makes None impossible
-                        if message.author.id.get() != self_id.get() || message.embeds.is_empty() {
-                            continue;
-                        }
+                let messages = tools::get_channel_messages(self.chan.get()?, ctx, None).await?;
+                let self_messages = &self.messages;
 
-                        let embed_footer = match &message.embeds.get(0).ok_or(Error::Generic)?.footer {
-                            Some(footer) => footer,
-                            None => {
-                                eprintln!("Embed sans footer: message {} ignoré.", message.id);
-                                continue;
-                            }
-                        };
 
-                        let footer_text = match embed_footer.text.parse() {
-                            Ok(n) => n,
-                            Err(e) => {
-                                eprintln!("{e}: message {} ignoré.", message.id);
-                                continue;
-                            }
-                        };
-
+                try_join_all(messages.iter().filter(|message|
+                    message.author.id.get() == self_id.get()
+                        && !message.embeds.is_empty()
+                )
+                    .filter_map(|message| message.embeds.get(0).unwrap().footer.as_ref().and_then(|footer| Some((message, footer))))
+                    .filter_map(|(message, footer)| footer.text.parse().ok().and_then(|footer_text| Some((message, footer_text))))
+                    .map(|(message, footer_text)| async move {
                         if let Some(object) = database.get(&footer_text) {
-                            if !self.messages.contains_key(&object.get_id()) {
-                                self.messages.insert(object.get_id(), message);
+                            if !self_messages.contains_key(&object.get_id()) {
+                                Ok(Some((object.get_id(), message.clone())))
                             } else {
                                 eprintln!("Message {} en trop: suppression.", message.id);
-                                message.delete(ctx).await?;
+                                let res = message.delete(ctx).await;
+                                res.and_then(|_| Ok(None))
                             }
                         } else {
-                            message.delete(ctx).await?;
                             eprintln!("Message {} sans objet associé: message supprimé.", message.id);
-                            continue;
+                            let res = message.delete(ctx).await;
+                            res.and_then(|_| Ok(None))
                         }
-
-
-                    }
-                    messages = self.chan.get()?.messages(ctx, GetMessages::new().limit(100).before(last_message_id)).await?;
-                }
+                    })).await?
+                    .into_iter().filter_map(|option| option)
+                    .for_each(|(object_id, message)| {self.messages.insert(object_id, message);});
             }
         }
         self.update(database, ctx).await

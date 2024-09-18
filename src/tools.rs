@@ -1,8 +1,9 @@
 use crate::{Bot, DataType, ErrType, Object};
 use chrono::{DateTime, NaiveDate, Utc};
-use poise::{serenity_prelude as serenity, Command, Context, CreateReply};
-use serenity::all::Context as SerenityContext;
+use poise::futures_util::FutureExt;
+use poise::{serenity_prelude as serenity, BoxFuture, Command, Context, CreateReply};
 use serenity::all::{ChannelId, CreateEmbed, CreateEmbedFooter, GuildChannel, Timestamp, User, UserId};
+use serenity::all::{Context as SerenityContext, GetMessages, Message, MessageId};
 use std::future::Future;
 
 pub trait Preloaded<T> {
@@ -191,4 +192,22 @@ pub fn create_paged_list<T, F: FnMut(&T) -> String>(mut objects: Vec<T>, mut str
         },
         None => vec![]
     }
+}
+
+pub fn get_channel_messages<'a>(chan: &'a GuildChannel, ctx: &'a SerenityContext, before: Option<&'a MessageId>) -> BoxFuture<'a, Result<Vec<Message>, ErrType>> {
+    async move {
+        let mut get_messages = GetMessages::new().limit(100);
+        if let Some(before) = before {
+            get_messages = get_messages.before(before);
+        }
+        let current_messages = chan.messages(ctx, get_messages).await?;
+        Ok(vec![
+            if let Some(last_message) = current_messages.last() {
+                get_channel_messages(chan, ctx, Some(&last_message.id)).await?
+            } else {
+                vec![]
+            },
+            current_messages
+        ].concat())
+    }.boxed()
 }
