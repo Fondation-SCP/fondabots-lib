@@ -63,7 +63,7 @@ pub mod object;
 /// Redéfinition du type utilisé pour des données de [`poise`], utilisant un [`Arc`] et un [`Mutex`]
 /// sur [`Bot`] pour lui permettre d’obtenir une référence mutable dans chaque commande si besoin.
 ///
-/// `T` doit implémenter [`object::Object`] : il faut garder en tête que ce type n’est qu’un
+/// `T` doit implémenter [`Object`] : il faut garder en tête que ce type n’est qu’un
 /// raccourci vers [`Bot`] qui impose `T: Object`.
 pub type DataType<T> = Arc<Mutex<Bot<T>>>;
 
