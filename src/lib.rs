@@ -113,6 +113,26 @@ pub struct Bot<T: Object> {
 
 impl<T: Object> Bot<T> {
 
+    /* Loads the database. One use in Bot::new */
+    fn _load_database(data: &Yaml) -> Result<HashMap<u64, T>, ErrType> {
+        println!("Chargement des données.");
+
+        Ok(data["entries"].as_vec()
+            .ok_or(ErrType::YamlParseError("Dans les données, entries n’est pas un tableau.".to_string()))?
+            .iter().map(|entry| match T::from_yaml(entry) {
+            Ok(obj) => (obj.get_id(), obj),
+            Err(e) => {
+                let mut debug_out = String::new();
+                let mut debug_emitter = YamlEmitter::new(&mut debug_out);
+                debug_emitter.compact(false);
+                debug_emitter.multiline_strings(true);
+                let _ = debug_emitter.dump(entry);
+                panic!("Erreur de chargement ({e}) dans le yaml suivant: {debug_out}")
+            }
+        }).collect())
+    }
+
+
     /// Création du bot. Attention, une fois le bot crée, il faudra le lancer par un appel à
     /// [`serenity::Client::start`] sur le [`Client`] renvoyé.
     ///
@@ -140,22 +160,9 @@ impl<T: Object> Bot<T> {
         let mut bot = Self {
             database: {
                 if let Some(data) = &data {
-                    println!("Chargement des données.");
                     let data = &data[0];
                     last_update = data["last_rss_update"].as_i64().unwrap_or(0);
-                    data["entries"].as_vec()
-                        .ok_or(ErrType::YamlParseError("Dans les données, entries n’est pas un tableau.".to_string()))?
-                        .iter().map(|entry| match T::from_yaml(entry) {
-                            Ok(obj) => (obj.get_id(), obj),
-                            Err(e) => {
-                                let mut debug_out = String::new();
-                                let mut debug_emitter = YamlEmitter::new(&mut debug_out);
-                                debug_emitter.compact(false);
-                                debug_emitter.multiline_strings(true);
-                                let _ = debug_emitter.dump(entry);
-                                panic!("Erreur de chargement ({e}) dans le yaml suivant: {debug_out}")
-                            }
-                        }).collect()
+                    Self::_load_database(data)?
                 } else {
                     println!("Pas de base de donnée trouvée : création d’une nouvelle.");
                     HashMap::new()
@@ -180,23 +187,22 @@ impl<T: Object> Bot<T> {
         let framework = Framework::builder()
             .options(poise::FrameworkOptions {
                 commands,
+                /* ------ event handler ----- */
                 event_handler: |ctx, event, _framework_context, data| {
                     Box::pin(async move {
                         let bot = &mut data.lock().await;
-                        match {if let FullEvent::InteractionCreate { interaction, .. } = event {
-                                if let Interaction::Component(ref mut component) = interaction.clone() {
-                                    bot.handle_interaction(ctx, component).await
-                                } else { Ok(()) }
-                            } else if let FullEvent::MessageDelete {deleted_message_id, ..} = event {
-                                bot.check_deletions(ctx, &deleted_message_id).await
-                            } else {Ok(())}}
-                        {
-                            Ok(o) => Ok::<(), ErrType>(o),
-                            Err(e) => {
-                                eprintln!("Erreur lors de la réception d’un évènement : {e}");
-                                return Err(e)
-                            }
-                        }?;
+
+                        /* Traitement des évènements */
+                        if let Err(e) = match event {
+                            FullEvent::InteractionCreate {interaction: Interaction::Component(component), ..} => bot.handle_interaction(ctx, &mut component.clone()).await,
+                            FullEvent::MessageDelete {deleted_message_id, ..} => bot.check_deletions(ctx, &deleted_message_id).await,
+                            _ => return Ok(()) /* Évite de mettre à jour les affichans ou sauvegarde à chaque event */
+                        } {
+                            eprintln!("Erreur lors de la réception d’un évènement : {e}");
+                            return Err(e);
+                        }
+
+                        /* Mise à jour des affichans */
                         if bot.update_affichans {
                             if let Err(e) = bot.update_affichans(ctx).await {
                                 eprintln!("Erreur lors de la mise à jour des affichans : {e}");
@@ -204,6 +210,8 @@ impl<T: Object> Bot<T> {
                             }
                             bot.update_affichans = false;
                         }
+
+                        /* Sauvegarde à chaque évènement reçu */
                         if let Err(e) = bot.save() {
                             eprintln!("Erreur lors d’une sauvegarde de routine: {e}");
                         }
@@ -213,6 +221,7 @@ impl<T: Object> Bot<T> {
                 },
                 ..Default::default()
             })
+            /* ----- setup ------ */
             .setup(|ctx, ready, framework| {
                 Box::pin(async move {
                     println!("Bot connecté à Discord. Réglage des derniers détails.");
@@ -226,13 +235,18 @@ impl<T: Object> Bot<T> {
                     } else {None};
                     try_join_all(bot.affichans.iter_mut().map(
                         |affichan| {
-                            /* Ok, ça c’est monstrueux mais je la flemme de trouver quelque chose de plus élégant. */
-                            let affichan_data = affichans_data.map(|affichans_data|
-                                affichans_data.as_hash().map(|affichans_data|
+                            /* Ok, ça c’est monstrueux mais j’ai la flemme de trouver quelque chose de plus élégant.
+                             * Récupère le Yaml lié à l’affichan
+                             * L’idée est de garder les Options et de propager les None tout en appliquant des transformations
+                             * qui génèrent encore plus d’Options, quel enfer.
+                             */
+                            let affichan_data = affichans_data.map(|affichans_data| /* Extrait le Yaml de l’Option */
+                                affichans_data.as_hash().map(|affichans_data| /* Extrait le Hash de l’Option créée par as_hash */
                                     affichans_data.get(&Yaml::Integer(affichan.get_chan_id() as i64))
-                                )).flatten().flatten();
+                                )).flatten().flatten(); /* On se débarrasse des Options imbriqués */
                             affichan.init(&bot.database, bot.self_id.as_ref().unwrap(), affichan_data, ctx)
-                        })).await?;
+                        }
+                    )).await?;
                     println!("Chargement des salons absolus.");
 
                     bot.absolute_chans = try_join_all(absolute_chans.iter().map(|(&name, chan_id)| {
@@ -271,6 +285,38 @@ impl<T: Object> Bot<T> {
         self.absolute_chans.get(name).ok_or(ErrType::ObjectNotFound(format!("Salon absolu {name} inexistant.")))
     }
 
+    /* Affiche la page suivante ou précédente d’un multimessage après appui sur un bouton, utilisé dans handle_interaction */
+    async fn _multimessage_bouton(&mut self, id: String, next: i32, ctx: &SerenityContext, interaction: &mut ComponentInteraction) -> serenity::all::Result<()> {
+        if let Some(&position) = self.mmpositions.get(&id) {
+            let new_pos: usize = ((position as i32) + next) as usize;
+            self.mmpositions.insert(id.clone(), new_pos);
+            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                CreateInteractionResponseMessage::new()
+                    .embed(self.multimessages.get(&id).unwrap()[new_pos].clone())
+                    .button(CreateButton::new(id.clone() + "-p").label("Précédent")
+                        .disabled(new_pos == 0)
+                        .style(ButtonStyle::Secondary))
+                    .button(CreateButton::new(id.clone() + "-n").label("Suivant")
+                        .disabled(new_pos == self.multimessages.get(&id).unwrap().len() - 1)
+                        .style(ButtonStyle::Secondary)))
+            ).await
+        } else {
+            /* Multimessage absent: bot reboot? */
+            interaction.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
+            /* Grise les boutons, puisqu’on ne peut plus trouver les autres pages */
+            interaction.message.edit(ctx, EditMessage::new()
+                .button(CreateButton::new(id.clone() + "-p")
+                    .label("Précédent")
+                    .disabled(true)
+                    .style(ButtonStyle::Secondary))
+                .button(CreateButton::new(id.clone() + "-n")
+                    .label("Suivant")
+                    .disabled(true)
+                    .style(ButtonStyle::Secondary)
+                )).await
+        }
+    }
+
     /* Gère les boutons, utilisé dans une closure dans new */
     async fn handle_interaction(&mut self, ctx: &SerenityContext, interaction: &mut ComponentInteraction) -> Result<(), ErrType> {
         if interaction.data.custom_id.starts_with("mm") {
@@ -278,33 +324,7 @@ impl<T: Object> Bot<T> {
                 .ok_or(ErrType::InteractionIDError(interaction.data.custom_id.clone(), interaction.message.id.get()))?.to_string();
             let next: i32 = if interaction.data.custom_id.split("-").last()
                 .ok_or(ErrType::InteractionIDError(interaction.data.custom_id.clone(), interaction.message.id.get()))? == "n" {1} else {-1};
-            if let Some(&position) = self.mmpositions.get(&id) {
-                let new_pos: usize = ((position as i32) + next) as usize;
-                self.mmpositions.insert(id.clone(), new_pos);
-                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                    CreateInteractionResponseMessage::new()
-                        .embed(self.multimessages.get(&id).unwrap()[new_pos].clone())
-                        .button(CreateButton::new(id.clone() + "-p").label("Précédent")
-                            .disabled(new_pos == 0)
-                            .style(ButtonStyle::Secondary))
-                        .button(CreateButton::new(id.clone() + "-n").label("Suivant")
-                            .disabled(new_pos == self.multimessages.get(&id).unwrap().len() - 1)
-                            .style(ButtonStyle::Secondary)))
-                    ).await?;
-            } else {
-                /* Multimessage absent: bot reboot? */
-                interaction.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
-                interaction.message.edit(ctx, EditMessage::new()
-                    .button(CreateButton::new(id.clone() + "-p")
-                        .label("Précédent")
-                        .disabled(true)
-                        .style(ButtonStyle::Secondary))
-                    .button(CreateButton::new(id.clone() + "-n")
-                        .label("Suivant")
-                        .disabled(true)
-                        .style(ButtonStyle::Secondary)
-                    )).await?;
-            }
+            self._multimessage_bouton(id, next, ctx, interaction).await?;
         } else {
             if let Err(e) = T::buttons(ctx, interaction, self).await {
                 match e {
