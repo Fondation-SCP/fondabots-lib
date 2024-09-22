@@ -1,3 +1,5 @@
+//! Module contenant la structure [`Affichan`].
+
 use errors::Error;
 use serenity::all::Message;
 use serenity::all::{ChannelId, MessageId, UserId};
@@ -12,14 +14,17 @@ use crate::Bot;
 use crate::ErrType;
 use crate::{errors, tools, Object};
 
-/* Attention: le test doit gérer les erreurs seul, il est possible que l’écrit n’existe pas. */
-
 /// Un salon d’affichage du bot.
 ///
 /// Ces salons d’affichage ont pour but d’afficher un certain nombre de messages d’objets correspondant
 /// au test donné. Ces messages peuvent lister une certaine catégorie définie d’objets, et chaque
 /// message peut avoir un certain nombre de boutons ayant des actions définies par l’utilisateur
 /// de la librairie (implémentation de [`Object`]).
+///
+/// Les différents Affichans sont crées à la création du bot (voir [`Bot::new`]) et sont ensuite
+/// stockés dans un champ du [`Bot`] et ne sont pas accessibles directement. Il est cependant possible
+/// de forcer la mise à jour des affichans par l’appel à [`Bot::update_affichans`] qui appelle
+/// la fonction [`Affichan::update`] pour chaque Affichan donné au chargement du bot.
 pub struct Affichan<T: Object> {
     /// Le salon Discord du salon d’affichage.
     chan: PreloadedChannel,
@@ -77,7 +82,7 @@ impl<T: Object> Affichan<T> {
                 } else {
                     match self.chan.get().unwrap().message(ctx, MessageId::new(message_id.unwrap() as u64)).await {
                         Ok(message) => Ok((object_id.unwrap() as u64, message)),
-                        Err(e) => Err(ErrType::LibError(Box::new(e)))
+                        Err(e) => Err(e.into())
                     }
                 }
             },
@@ -218,7 +223,7 @@ impl<T: Object> Affichan<T> {
                 .map(|(object_id, _)| async {
                     match self.chan.get() {
                         Ok(chan) => match bot.database.get(object_id) {
-                            Some(object) => chan.send_message(ctx, object.get_message()).await.or_else(|err| Err(Error::LibError(Box::new(err)))),
+                            Some(object) => chan.send_message(ctx, object.get_message()).await.or_else(|err| Err(err.into())),
                             None => Err(Error::ObjectNotFound(format!("Objet {} référencé dans un message supprimé dans Affichan {} (id: {})", *object_id, chan.name, chan.id)))
                         }
                         Err(e) => Err(e)

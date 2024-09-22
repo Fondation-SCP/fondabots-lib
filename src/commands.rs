@@ -1,3 +1,5 @@
+//! Ce module contient les commandes présentes par défaut avec les bots construits avec cette librairie.
+
 use crate::tools::alias;
 use crate::tools::get_object;
 use poise::Command;
@@ -12,6 +14,7 @@ use super::DataType;
 use super::ErrType;
 use super::Object;
 
+/// Renvoie l’embed « Aucun résultat » en indiquant la recherche de l’utilisateur.
 pub fn aucun_resultat(recherche: &str) -> CreateEmbed {
     CreateEmbed::new()
         .title("Aucun résultat.")
@@ -253,7 +256,7 @@ pub async fn delete_commands<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) 
 
 
 
-
+/// Enregistrement des commandes par défaut de la bibliothèque fondabots.
 pub fn command_list<T: Object>() -> Vec<Command<DataType<T>, ErrType>> {
     vec![rechercher(), plop(), supprimer(), annuler(), update_affichans(), renommer(), doublons(),
          up(), refresh_affichans(), bdd(), taille_bdd(), save(), maj(),

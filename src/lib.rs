@@ -136,8 +136,16 @@ impl<T: Object> Bot<T> {
     /// Création du bot. Attention, une fois le bot crée, il faudra le lancer par un appel à
     /// [`serenity::Client::start`] sur le [`Client`] renvoyé.
     ///
+    /// C’est dans cette métohde que les [`Affichan`] et les commandes sont initialisées ; il n’est
+    /// plus possible de les changer après coup dans le programme. Pour voir comment créer des
+    /// [`Affichan`], voir [`Affichan::new`]. Aux commandes fournies sont automatiquement ajoutées
+    /// les commandes par défaut du bot. La possiblité de ne pas les inclure pourra éventuellement
+    /// être rajoutée par la suite.
+    ///
     /// Les salons « absolus » correspondent à des salons accessibles depuis toutes les
-    /// commandes, qui sont à fournir par un nom et un identifiant.
+    /// commandes, qui sont à fournir par un nom et un identifiant. Cela permet à n’importe quelle
+    /// commande de publier des messages dans ces salons, indépendemment du salon dans lequel
+    /// elles ont été lancées. Ils sont accessibles par [`Bot::get_absolute_chan`].
     ///
     /// # Panics
     /// Cette méthode essaye au maximum de renvoyer ses erreurs, mais panique en cas d’erreur

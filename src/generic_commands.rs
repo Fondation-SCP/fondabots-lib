@@ -1,3 +1,14 @@
+//! Module contenant de nombreuses fonctions auxiliaires prenant en charge des commandes pouvant
+//! s’adapter selon le type d’objet créé. Ces commandes ne peuvent cependant pas être entièrement
+//! crées de manière générique car le nombre de [`Field`] différents présents dans un [`Object`]
+//! est totalement au désir de l’utilisateur. Il peut alors exister plusieurs commandes différentes
+//! utilisant les mêmes fonctions auxiliaires pour des [`Field`] différents.
+//!
+//! Pour créer une commande [`poise`] utilisant une fonction auxiliaire de ce module, il suffit
+//! de créer la commande normalement avec les paramètres et leur description, puis d’appeler
+//! la fontion auxiliaire dans le corps de la commande. Celle-ci effectue alors directement
+//! la commande avec les [`Field`] donnés, et s’occupe de tout (notamment l’affichage des résultats).
+
 use std::collections::{HashMap, HashSet};
 
 use poise::{Context, CreateReply};
@@ -8,11 +19,17 @@ use crate::object::Object;
 use crate::tools::get_object;
 use crate::{tools, DataType, ErrType};
 
+/* Fonction auxiliaire renvoyant tous les objets ayant le champ demandé à la valeur demandée */
 fn _lister_one<'a, T: Object, E: Field<T>>(database: &'a HashMap<u64, T>, field: &Option<E>) -> HashSet<&'a u64> {
     tools::sort_by_date(database.iter().filter(|(_, object)| E::comply_with(object, field)).collect())
         .into_iter().map(|(id, _) | {id}).collect()
 }
 
+/// Auxiliaire générique pour une commande lister à deux champs. Effectue une recherche parmi la
+/// base de données et affiche les résultats. Si l’une des entrées est définie à [`None`], alors
+/// la recherche acceptera tout type de champs.
+///
+/// La commande échoue (message d’erreur Discord) si les deux champs sont [`None`].
 pub async fn lister_two<T: Object, E1: Field<T>, E2: Field<T>>(
     ctx: Context<'_, DataType<T>, ErrType>,
     field1: Option<E1>,
@@ -52,7 +69,7 @@ pub async fn lister_two<T: Object, E1: Field<T>, E2: Field<T>>(
     Ok(())
 }
 
-
+/// Fonction auxiliaire permettant la modification d’un champ [`Field`] donné.
 pub async fn change_field<T: Object, F: Field<T>>(ctx: Context<'_, DataType<T>, ErrType>,
                     critere: String,
                     field: F) -> Result<(), ErrType> {
