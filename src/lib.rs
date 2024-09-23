@@ -25,6 +25,7 @@
 #![doc(issue_tracker_base_url = "https://github.com/Fondation-SCP/fondabots-lib/issues/")]
 
 
+use poise::serenity_prelude as serenity;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs;
@@ -34,7 +35,7 @@ use std::time::{Duration, SystemTime};
 use chrono::{DateTime, Utc};
 use poise::reply::CreateReply;
 use poise::Context;
-use poise::{serenity_prelude as serenity, Framework};
+use poise::Framework;
 use serenity::all::UserId;
 use serenity::all::{ButtonStyle, Context as SerenityContext, CreateInteractionResponse, CreateInteractionResponseMessage, GuildChannel, MessageId};
 use serenity::all::{ComponentInteraction, CreateButton, GatewayIntents};
@@ -49,6 +50,8 @@ use yaml_rust2::{yaml, Yaml, YamlEmitter, YamlLoader};
 
 use crate::tools::basicize;
 use affichan::Affichan;
+/// Type d’erreur utilisé par la bibliothèque fondabots. Renommé ici pour permettre un
+/// changement rapide si besoin et l’évitement d’une confusion avec d’autres types d’erreurs.
 pub use errors::Error as ErrType;
 #[deprecated(since = "1.1.0", note = "Utiliser fondabots_lib::object::Object")]
 pub use object::Object;
