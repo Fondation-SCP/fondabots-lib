@@ -113,7 +113,7 @@ macro_rules! try_loop {
 /// Simplifie une chaîne de caractères en la mettant en minuscules, remplaçant certains caractères
 /// en caractères équivalents plus communs, et en supprimant les diacritiques et caractères non-ascii.
 pub fn basicize(s: &str) -> String {
-    s.replace("`", "'").replace(" ", " ").nfd()
+    s.to_lowercase().replace("`", "'").replace(" ", " ").nfd()
         .filter(|c| c.is_ascii() || c.is_alphanumeric())
         .collect()
 }

@@ -6,6 +6,7 @@ use serenity::all::{ChannelId, MessageId, UserId};
 use serenity::all::{Context as SerenityContext, Context};
 use serenity::futures::future::{join_all, try_join_all};
 use std::collections::HashMap;
+use std::mem::take;
 use tools::PreloadedChannel;
 use yaml_rust2::{yaml, Yaml};
 
@@ -72,6 +73,7 @@ impl<T: Object> Affichan<T> {
 
     /* Charge une sauvegarde d’Affichan. Fonction utilisée dans init. */
     async fn _load_from_save(&self, saved_data: &Yaml, ctx: &SerenityContext) -> Result<HashMap<u64, Message>, ErrType> {
+        println!("Chargement à partir d'une sauvegarde d'affichan…");
         Ok(try_join_all(saved_data.as_vec().ok_or(ErrType::YamlParseError("Erreur de yaml dans les affichans: pas un tableau.".to_string()))?
             .into_iter().map(|yaml_message| async { match yaml_message.as_hash() {
             Some(_) => {
@@ -80,19 +82,22 @@ impl<T: Object> Affichan<T> {
                 if object_id.is_none() || message_id.is_none() {
                     Err(ErrType::YamlParseError("Erreur de yaml dans un affichan: un identifiant n’est pas un entier.".into()))
                 } else {
-                    match self.chan.get().unwrap().message(ctx, MessageId::new(message_id.unwrap() as u64)).await {
-                        Ok(message) => Ok((object_id.unwrap() as u64, message)),
-                        Err(e) => Err(e.into())
+                    let message_id = message_id.unwrap() as u64;
+                    println!("Récupération du message {message_id}…");
+                    match self.chan.get().unwrap().message(ctx, MessageId::new(message_id)).await {
+                        Ok(message) => Ok(Some((object_id.unwrap() as u64, message))),
+                        Err(_) => {eprintln!("Message {message_id} non trouvé sur Discord. Tant pis."); Ok(None)}
                     }
                 }
             },
             None => Err(ErrType::YamlParseError("Erreur de yaml dans un affichan: l’une des entrées n’est pas un dictionnaire.".into()))
         }}
-        )).await?.into_iter().collect())
+        )).await?.into_iter().filter_map(|x| x).collect())
     }
 
     /* Retrouve les objets de l’Affichan d’après les messages déjà présents dans le salon Discord. Fonction utilisée dans init. */
     async fn _load_from_messages(&self, database: &HashMap<u64, T>, self_id: &UserId, messages: Vec<Message>, ctx: &Context) -> Result<HashMap<u64, Message>, Error> {
+        println!("Chargement à partir des messages…");
         let self_messages = &self.messages;
 
         Ok(try_join_all(messages.iter().filter(|message|
@@ -147,11 +152,27 @@ impl<T: Object> Affichan<T> {
         /* Met à jour les objets déjà présents dans la base de données */
         let edit_fails = self._edit_messages_if_modified(database, ctx).await;
 
-        self.messages.retain(|object_id, _| /* On garde si */
-            database.contains_key(object_id) && /* dans la bdd */
-            (self.test)(database.get(object_id)) && /* true au test */
-            !edit_fails.contains(object_id) /* pas d’erreur d’edition du message */
+        let mut deleted_elements = Vec::new();
+
+        self.messages.retain(|object_id, message| { 
+                let keep = /* on garde si */
+                    database.contains_key(object_id) && /* dans la bdd */
+                    (self.test)(database.get(object_id)) && /* true au test */
+                    !edit_fails.contains(object_id);
+                if !keep {
+                    deleted_elements.push(take(message));
+                }
+                keep
+            }
         );
+
+        join_all(
+            deleted_elements.iter().map(|message| async {
+                if let Err(e) = message.delete(ctx).await {
+                    eprint!("Impossible de supprimer l'un des messages : {e}");
+                }
+            })
+        ).await;
 
         let self_chan = &self.chan;
         let self_test = &self.test;
