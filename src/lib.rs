@@ -58,6 +58,12 @@ pub use errors::Error as ErrType;
 #[deprecated(since = "1.1.0", note = "Utiliser fondabots_lib::object::Object")]
 pub use object::Object;
 
+/// Réutilisation de yaml_rust2 très importante dans cette bibliothèque ; cela évite aux bots
+/// utilisant la lib de devoir avoir yaml_rust2 dans leurs dépendances (et donc d'éviter les
+/// incohérences de versions).
+pub use yaml_rust2;
+
+
 pub mod command_data;
 pub mod affichan;
 mod commands;
