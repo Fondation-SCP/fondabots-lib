@@ -128,7 +128,7 @@ pub struct Bot<T: Object> {
     ///
     /// La configuration de cette commande doit se faire par [`Bot::command_checker`], et est
     /// optionnelle. Par défaut, elle renvoie toujours `true`.
-    pub(crate) command_checker: CommandChecker<T>,
+    pub(crate) command_checker: Box<CommandChecker<T>>,
 
     /* Stockage des owners, transféré au Framework */
     owners: HashSet<UserId>,
@@ -352,7 +352,7 @@ impl<T: Object> Bot<T> {
     /// Permet de définir une fonction pour `command_checker` autre que celle par défaut.
     ///
     /// La valeur par défaut de cette fonction renvoie toujours `true`.
-    pub fn command_checker(mut self, f: CommandChecker<T>) -> Self {
+    pub fn command_checker(mut self, f: Box<CommandChecker<T>>) -> Self {
         self.command_checker = f;
         self
     }

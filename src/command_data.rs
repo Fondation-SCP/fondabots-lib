@@ -12,7 +12,7 @@ use poise::{BoxFuture, Context};
 /// et renvoie un bloc async boxé renvoyant un [`Result`] de paramètres booléen et [`ErrType`].
 ///
 /// Note : il faut utiliser [`FutureExt::boxed`] après le bloc async.
-pub type CommandChecker<T> = Box<dyn Fn(Context<'_, DataType<T>, ErrType>) -> BoxFuture<'_, Result<bool, ErrType>> + Send + Sync>;
+pub type CommandChecker<T> = dyn Fn(Context<'_, DataType<T>, ErrType>) -> BoxFuture<'_, Result<bool, ErrType>> + Send + Sync;
 
 
 /// Ce type est la structure utilisée pour le [`poise::structs::Command::custom_data`].
