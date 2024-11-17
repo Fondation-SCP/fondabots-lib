@@ -3,6 +3,9 @@
 //! des nombreuses propriétés que peut contenir un [`Object`], et permet l’utilisation des fonctions
 //! auxiliaires définies dans [`crate::generic_commands`] permettant de créer des fonctions interagissant
 //! avec ces champs très facilement.
+//!
+//! [`Object`] contient également des fonctions et paramètres généraux du bot qui doivent être modifiés
+//! pour son bon fonctionnement.
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
@@ -61,6 +64,8 @@ use crate::{Bot, DataType, ErrType};
 /// * [`Object::get_message_edit`] : renvoie un [`EditMessage`].
 /// * [`Object::get_reply`] : renvoie un [`CreateReply`].
 pub trait Object: Send + Sync + 'static + PartialEq + Clone + Debug {
+    
+    /* TODO 2.0 */
     #[deprecated(since = "1.1.0", note = "Méthode inutile. Sera supprimée en 2.0.0")]
     fn new() -> Self {
         unimplemented!("Méthode supprimée.")
@@ -160,7 +165,7 @@ pub trait Object: Send + Sync + 'static + PartialEq + Clone + Debug {
     /// Bien que ça ne soit pas requis pour la compilation pour des raisons de compatiblité rétroactive,
     /// tout appel à cette méthode non-réimplémentée aboutira en une panique.
     /// </div>
-    fn get_date(&self) -> &Timestamp {
+    fn get_date(&self) -> &Timestamp { /* TODO 2.0 rendre obligatoire */
         unimplemented!("Cette méthode devrait être ré-implémentée.")
     }
 
@@ -170,7 +175,7 @@ pub trait Object: Send + Sync + 'static + PartialEq + Clone + Debug {
     /// Bien que ça ne soit pas requis pour la compilation pour des raisons de compatiblité rétroactive,
     /// tout appel à cette méthode non-réimplémentée aboutira en une panique.
     /// </div>
-    fn set_date(&mut self, _t: Timestamp) {
+    fn set_date(&mut self, _t: Timestamp) { /* TODO 2.0 rendre obligatoire */
         unimplemented!("Cette méthode devrait être ré-implémentée.")
     }
 }

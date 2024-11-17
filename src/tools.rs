@@ -6,7 +6,7 @@ use crate::{Bot, DataType, ErrType, Object};
 use chrono::{DateTime, NaiveDate, Utc};
 use poise::futures_util::FutureExt;
 use poise::{serenity_prelude as serenity, BoxFuture, Command, Context, CreateReply};
-use serenity::all::{ChannelId, CreateEmbed, CreateEmbedFooter, GuildChannel, Timestamp, User, UserId};
+use serenity::all::{ChannelId, CreateEmbed, CreateEmbedFooter, GuildChannel, RoleId, Timestamp, User, UserId};
 use serenity::all::{Context as SerenityContext, GetMessages, Message, MessageId};
 use std::future::Future;
 use unicode_normalization::UnicodeNormalization;
@@ -255,4 +255,19 @@ pub fn get_channel_messages<'a>(chan: &'a GuildChannel, ctx: &'a SerenityContext
             current_messages
         ].concat())
     }.boxed()
+}
+
+pub async fn check_for_role<T: Object>(ctx: &Context<'_, DataType<T>, ErrType>, role: RoleId) -> Result<bool, ErrType> {
+    let member = ctx.author_member().await;
+    if let Some(member) = member {
+        if !member.roles.contains(&role) {
+            ctx.reply("Vous n'avez pas l'autorisation d'utiliser cette commande.").await?;
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    } else {
+        ctx.reply("Échec de la vérification de l'autorisation d'utiliser la commande. Réessayez plus tard.").await?;
+        Ok(false)
+    }
 }

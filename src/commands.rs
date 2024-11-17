@@ -1,5 +1,10 @@
 //! Ce module contient les commandes présentes par défaut avec les bots construits avec cette librairie.
 
+use super::tools;
+use super::DataType;
+use super::ErrType;
+use super::Object;
+use crate::command_data::{CommandData, Permission};
 use crate::tools::alias;
 use crate::tools::get_object;
 use poise::Command;
@@ -8,11 +13,6 @@ use poise::{serenity_prelude as serenity, CreateReply};
 use serenity::all::CreateAttachment;
 use serenity::all::{CreateEmbed, CreateEmbedAuthor, Timestamp};
 use serenity::futures::future::try_join_all;
-
-use super::tools;
-use super::DataType;
-use super::ErrType;
-use super::Object;
 
 /// Renvoie l’embed « Aucun résultat » en indiquant la recherche de l’utilisateur.
 pub fn aucun_resultat(recherche: &str) -> CreateEmbed {
@@ -28,7 +28,7 @@ pub fn aucun_resultat(recherche: &str) -> CreateEmbed {
 /// Cette commande affiche tous les objets contenant le critère demandé.
 /// Un objet sera affiché dans les résultats s’il contient chaque mot du critère dans
 /// les mots de son nom.
-#[poise::command(slash_command, category = "Recherche")]
+#[poise::command(slash_command, category = "Recherche", custom_data = CommandData::perms(Permission::READ), check = CommandData::check)]
 pub async fn rechercher<T: Object>(
     ctx: Context<'_, DataType<T>, ErrType>,
     #[description = "Critère de recherche"] critere: String
@@ -56,7 +56,7 @@ pub async fn rechercher<T: Object>(
 }
 
 /// Commande de test pour vérifier que le bot fonctionne.
-#[poise::command(slash_command, category = "Salons d’affichage")]
+#[poise::command(slash_command, category = "Salons d’affichage", custom_data = CommandData::perms(Permission::READ), check = CommandData::check)]
 pub async fn plop<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     ctx.send(CreateReply::default().content("Plop !")).await?;
     Ok(())
@@ -67,9 +67,10 @@ pub async fn plop<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(
 /// Le nom entré doit être suffisamment précis pour identifier un seul écrit. Sinon, entrer
 /// l’identifiant de l’écrit et mettre est_id à true. Attention : il n’y a pas de confirmation,
 /// soyez sûr d’entrer le bon nom.
-#[poise::command(slash_command, category = "Édition")]
+#[poise::command(slash_command, category = "Édition", custom_data = CommandData::perms(Permission::WRITE), check = CommandData::check)]
 pub async fn supprimer<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
     #[description = "Critère d’identification de l’objet"] critere: String) -> Result<(), ErrType> {
+
     let bot = &mut ctx.data().lock().await;
     if let Some(object_id) = get_object(&ctx, bot, &critere).await? {
         bot.archive(vec![object_id]);
@@ -82,7 +83,7 @@ pub async fn supprimer<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
 }
 
 /// Annule la dernière action effectuée sur la base de données.
-#[poise::command(slash_command, category = "Édition")]
+#[poise::command(slash_command, category = "Édition", custom_data = CommandData::perms(Permission::WRITE), check = CommandData::check)]
 pub async fn annuler<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     let bot = &mut ctx.data().lock().await;
     if bot.annuler() {
@@ -94,7 +95,7 @@ pub async fn annuler<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Resul
 }
 
 /// Vérifie que les salons d’affichage sont bien à jour.
-#[poise::command(slash_command, category = "Salons d’affichage")]
+#[poise::command(slash_command, category = "Salons d’affichage", custom_data = CommandData::perms(Permission::MANAGE), check = CommandData::check)]
 pub async fn update_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     ctx.defer().await?;
     ctx.data().lock().await.update_affichans(ctx.serenity_context()).await?;
@@ -103,7 +104,7 @@ pub async fn update_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>)
 }
 
 /// Renomme un objet.
-#[poise::command(slash_command, category = "Édition")]
+#[poise::command(slash_command, category = "Édition", custom_data = CommandData::perms(Permission::WRITE), check = CommandData::check)]
 pub async fn renommer<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
     #[description = "Critère d’identification de l’objet"] critere: String,
     #[description = "Nouveau nom de l’objet"] nouveau_nom: String) -> Result<(), ErrType> {
@@ -119,7 +120,7 @@ pub async fn renommer<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
 }
 
 /// Supprime les doublons de la base de données.
-#[poise::command(slash_command, category = "Entretien de la base de données")]
+#[poise::command(slash_command, category = "Entretien de la base de données", custom_data = CommandData::perms(Permission::MANAGE), check = CommandData::check)]
 pub async fn doublons<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     ctx.defer().await?;
     let bot = &mut ctx.data().lock().await;
@@ -139,7 +140,7 @@ pub async fn doublons<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Resu
 
     ctx.send(CreateReply::default()
         .content(if nb_deleted == 0 {
-            format!("Aucun doublon trouvé.")
+            "Aucun doublon trouvé.".to_string()
         } else {
             let pluriel = if nb_deleted == 1 {"s"} else {""};
             format!("{} doublon{pluriel} supprimé{pluriel}.", nb_deleted)
@@ -148,7 +149,7 @@ pub async fn doublons<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Resu
 }
 
 /// Remet un objet à l’avant des salons d’affichage
-#[poise::command(slash_command, category = "Salons d’affichage")]
+#[poise::command(slash_command, category = "Salons d’affichage", custom_data = CommandData::perms(Permission::WRITE), check = CommandData::check)]
 pub async fn up<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
     #[description = "Critère d’identification de l’objet."] critere: String) -> Result<(), ErrType> {
     let bot = &mut ctx.data().lock().await;
@@ -166,7 +167,7 @@ pub async fn up<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
 }
 
 /// Réinitialise les messages des salons d’affichage.
-#[poise::command(slash_command, category = "Salons d’affichage")]
+#[poise::command(slash_command, category = "Salons d’affichage", custom_data = CommandData::perms(Permission::MANAGE), check = CommandData::check)]
 pub async fn refresh_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     let bot = &mut ctx.data().lock().await;
     ctx.defer().await?;
@@ -176,7 +177,7 @@ pub async fn refresh_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>
 }
 
 /// Réinitialise les affichans
-#[poise::command(slash_command, category = "Salons d’affichage")]
+#[poise::command(slash_command, category = "Salons d’affichage", custom_data = CommandData::perms(Permission::MANAGE), check = CommandData::check)]
 pub async fn reset_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     let bot = &mut ctx.data().lock().await;
     ctx.defer().await?;
@@ -187,7 +188,7 @@ pub async fn reset_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) 
 }
 
 /// Renvoie la base de données.
-#[poise::command(slash_command, category = "Base de données")]
+#[poise::command(slash_command, category = "Base de données", custom_data = CommandData::perms(Permission::MANAGE), check = CommandData::check)]
 pub async fn bdd<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     ctx.defer().await?;
     ctx.send(CreateReply::default().attachment(CreateAttachment::path(&ctx.data().lock().await.data_file).await?)).await?;
@@ -195,7 +196,7 @@ pub async fn bdd<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<()
 }
 
 /// Renvoie le nombre d’objets dans la base de données.
-#[poise::command(slash_command, category = "Base de données")]
+#[poise::command(slash_command, category = "Base de données", custom_data = CommandData::perms(Permission::READ), check = CommandData::check)]
 pub async fn taille_bdd<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     ctx.send(CreateReply::default().content(
         format!("Il y a actuellement {} écrits dans la base de données.",
@@ -205,7 +206,7 @@ pub async fn taille_bdd<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Re
 }
 
 /// Sauvegarde la base de données.
-#[poise::command(slash_command, category = "Base de données")]
+#[poise::command(slash_command, category = "Base de données", custom_data = CommandData::perms(Permission::READ), check = CommandData::check)]
 pub async fn save<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     ctx.defer().await?;
     ctx.data().lock().await.save()?;
@@ -214,7 +215,7 @@ pub async fn save<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(
 }
 
 /// Appelle manuellement la commande de mise à jour RSS. Modification non annulable.
-#[poise::command(slash_command, category = "Base de données")]
+#[poise::command(slash_command, category = "Base de données", custom_data = CommandData::perms(Permission::MANAGE), check = CommandData::check)]
 pub async fn maj<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     ctx.defer().await?;
     let taille_ancienne = ctx.data().lock().await.database.len();
@@ -227,6 +228,10 @@ pub async fn maj<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<()
 }
 
 
+/// Cette commande supprime tous les enregistrements des commandes Discord et éteint le bot.
+///
+/// Elle n'est accessible qu'à la personne qui gère le bot actuellement; cette fonctionnalité
+/// n'étant pas encore implémentée, elle n'est accessible à personne.
 #[poise::command(slash_command, owners_only)]
 pub async fn delete_commands<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     let serenity_ctx = ctx.serenity_context();

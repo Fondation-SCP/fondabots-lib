@@ -9,7 +9,7 @@
 //!
 //! ### Utilisation
 //! Pour utiliser cette bibliothèque, il faut :
-//! * Définir une structure d’objet implémentant [`object::Object`]
+//! * Définir une structure d’objet implémentant [`Object`]
 //! * Définir des caractéristiques qui seront des champs de la structure définie plus haut,
 //! implémentant [`object::Field`]
 //! * Définir éventuellement des commandes supplémentaires dont la liste est à donner au bot.
@@ -33,10 +33,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
+use poise::futures_util::FutureExt;
 use poise::reply::CreateReply;
 use poise::Context;
 use poise::Framework;
-use serenity::all::UserId;
+use serenity::all::{ActivityData, UserId};
 use serenity::all::{ButtonStyle, Context as SerenityContext, CreateInteractionResponse, CreateInteractionResponseMessage, GuildChannel, MessageId};
 use serenity::all::{ComponentInteraction, CreateButton, GatewayIntents};
 use serenity::all::{CreateActionRow, EditMessage, Interaction};
@@ -48,6 +49,7 @@ use serenity::FullEvent;
 use tokio::time;
 use yaml_rust2::{yaml, Yaml, YamlEmitter, YamlLoader};
 
+use crate::command_data::CommandChecker;
 use crate::tools::basicize;
 use affichan::Affichan;
 /// Type d’erreur utilisé par la bibliothèque fondabots. Renommé ici pour permettre un
@@ -56,12 +58,14 @@ pub use errors::Error as ErrType;
 #[deprecated(since = "1.1.0", note = "Utiliser fondabots_lib::object::Object")]
 pub use object::Object;
 
+pub mod command_data;
 pub mod affichan;
 mod commands;
 pub mod errors;
 pub mod tools;
 pub mod generic_commands;
 pub mod object;
+
 
 /// Redéfinition du type utilisé pour des données de [`poise`], utilisant un [`Arc`] et un [`Mutex`]
 /// sur [`Bot`] pour lui permettre d’obtenir une référence mutable dans chaque commande si besoin.
@@ -70,7 +74,7 @@ pub mod object;
 /// raccourci vers [`Bot`] qui impose `T: Object`.
 pub type DataType<T> = Arc<Mutex<Bot<T>>>;
 
-/// Structure de données de bot. Cette structure, où `T` est l’implémentation d’un [`object::Object`]
+/// Structure de données de bot. Cette structure, où `T` est l’implémentation d’un [`Object`]
 /// pour le bot souhaité, contient, entre autre, la base de données et les salons d’affichage.
 pub struct Bot<T: Object> {
     /// Base de données des objets.
@@ -85,7 +89,7 @@ pub struct Bot<T: Object> {
     history: VecDeque<Vec<(u64, Option<T>)>>,
 
     /// Date et heure du dernier écrit récupéré dans les flux RSS. Ce champ est à réutiliser dans
-    /// [`object::Object::maj_rss`] pour éviter de récupérer plusieurs fois le même écrit.
+    /// [`Object::maj_rss`] pour éviter de récupérer plusieurs fois le même écrit.
     pub last_rss_update: DateTime<Utc>,
 
     /* Identifiant du bot. None si le bot n’est pas encore chargé. */
@@ -111,7 +115,20 @@ pub struct Bot<T: Object> {
     /// Passer à `true` pour activer la mise à jour (appel à [`Bot::update_affichans`]),
     /// repassera à `false` après. Ce trigger permet de delayer cette mise à jour afin de ne pas
     /// bloquer le thread et de ne pas utiliser de `await`.
-    pub update_affichans: bool
+    pub update_affichans: bool,
+
+    /// Cette fonction est appelée systématiquement au début de chaque commande intégrée, permettant de
+    /// vérifier si la commande a le droit de s'exécuter. La commande ne s'exécute que si le résultat
+    /// booléen est `true`. Il est possible de se baser sur les données de [`CommandData`] via le
+    /// passage de [`Context`].
+    ///
+    /// Attention : l'appel de cette commande n'est pas automatique pour les commandes qui ne sont
+    /// pas définies au sein de cette librairie. Pour faire appeler cette fonction pour vos commandes,
+    /// précisez `check = CommandData::check` (voir [`CommandData::check`]).
+    ///
+    /// La configuration de cette commande doit se faire par [`Bot::set_command_checker`], et est
+    /// optionnelle. Par défaut, elle renvoie toujours `true`.
+    pub(crate) command_checker: CommandChecker<T>
 }
 
 impl<T: Object> Bot<T> {
@@ -137,7 +154,7 @@ impl<T: Object> Bot<T> {
 
 
     /// Création du bot. Attention, une fois le bot crée, il faudra le lancer par un appel à
-    /// [`serenity::Client::start`] sur le [`Client`] renvoyé.
+    /// [`Client::start`] sur le [`Client`] renvoyé.
     ///
     /// C’est dans cette métohde que les [`Affichan`] et les commandes sont initialisées ; il n’est
     /// plus possible de les changer après coup dans le programme. Pour voir comment créer des
@@ -188,7 +205,8 @@ impl<T: Object> Bot<T> {
             affichans,
             data_file: savefile_path.to_string(),
             absolute_chans: HashMap::new(),
-            update_affichans: false
+            update_affichans: false,
+            command_checker: Box::new(|_| async {Ok(true)}.boxed())
         };
 
         println!("Création du framework.");
@@ -230,17 +248,20 @@ impl<T: Object> Bot<T> {
 
                     })
                 },
+                // owners, TODO 2.0: ajouter les owners
                 ..Default::default()
             })
             /* ----- setup ------ */
             .setup(|ctx, ready, framework| {
                 Box::pin(async move {
                     println!("Bot connecté à Discord. Réglage des derniers détails.");
+                    ctx.idle();
                     println!("Enregistrement des commandes.");
                     poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                     println!("Récupération de l’identifiant.");
                     bot.self_id = Some(ready.user.id);
                     println!("Chargement des salons d’affichage.");
+                    ctx.set_activity(Some(ActivityData::custom("Chargement des salons…")));
                     let affichans_data = if let Some(data) = &data {
                         Some(&data[0]["affichans"])
                     } else {None};
@@ -282,6 +303,8 @@ impl<T: Object> Bot<T> {
                         }
                     });
                     println!("Chargement terminé !");
+                    ctx.set_activity(Some(ActivityData::playing("critiquer")));
+                    ctx.online();
                     Ok(bot_mutex_2)
                 })
             }).build();
@@ -294,6 +317,14 @@ impl<T: Object> Bot<T> {
     /// Renvoie une référence vers le salon du nom donné, ou une erreur s’il n’existe pas.
     pub fn get_absolute_chan(&self, name: &'static str) -> Result<&GuildChannel, ErrType> {
         self.absolute_chans.get(name).ok_or(ErrType::ObjectNotFound(format!("Salon absolu {name} inexistant.")))
+    }
+
+    /// Permet de définir une fonction pour `command_checker` autre que celle par défaut.
+    ///
+    /// La valeur par défaut de cette fonction renvoie toujours `true`.
+    pub fn set_command_checker(mut self, f: CommandChecker<T>) -> Self {
+        self.command_checker = f;
+        self
     }
 
     /* Affiche la page suivante ou précédente d’un multimessage après appui sur un bouton, utilisé dans handle_interaction */
@@ -462,8 +493,8 @@ impl<T: Object> Bot<T> {
         Ok(())
     }
 
-    /// Appelle [`affichan::Affichan::update`] pour tous les affichans, et remet le drapeau
-    /// « modifié » des objets à `false` (voir [`object::Object::set_modified`]).
+    /// Appelle [`Affichan::update`] pour tous les affichans, et remet le drapeau
+    /// « modifié » des objets à `false` (voir [`Object::set_modified`]).
     pub async fn update_affichans(&mut self, ctx: &SerenityContext) -> Result<(), ErrType> {
         try_join_all(self.affichans.iter_mut().map(|affichan| affichan.update(&self.database, ctx))).await?;
         self.database.iter_mut().for_each(|(_, ecrit)| ecrit.set_modified(false));
