@@ -230,8 +230,7 @@ pub async fn maj<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<()
 
 /// Cette commande supprime tous les enregistrements des commandes Discord et éteint le bot.
 ///
-/// Elle n'est accessible qu'à la personne qui gère le bot actuellement; cette fonctionnalité
-/// n'étant pas encore implémentée, elle n'est accessible à personne.
+/// Elle n'est accessible qu'aux utilisateurs qui gèrent le bot, définis par [`Bot::owners`].
 #[poise::command(slash_command, owners_only)]
 pub async fn delete_commands<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Result<(), ErrType> {
     let serenity_ctx = ctx.serenity_context();

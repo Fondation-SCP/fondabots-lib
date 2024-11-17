@@ -26,8 +26,8 @@
 
 
 use poise::serenity_prelude as serenity;
-use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -126,14 +126,36 @@ pub struct Bot<T: Object> {
     /// pas définies au sein de cette librairie. Pour faire appeler cette fonction pour vos commandes,
     /// précisez `check = CommandData::check` (voir [`CommandData::check`]).
     ///
-    /// La configuration de cette commande doit se faire par [`Bot::set_command_checker`], et est
+    /// La configuration de cette commande doit se faire par [`Bot::command_checker`], et est
     /// optionnelle. Par défaut, elle renvoie toujours `true`.
-    pub(crate) command_checker: CommandChecker<T>
+    pub(crate) command_checker: CommandChecker<T>,
+
+    /* Stockage des owners, transféré au Framework */
+    owners: HashSet<UserId>,
+}
+
+impl<T: Object> Default for Bot<T> {
+    fn default() -> Self {
+        Self {
+            database: HashMap::new(),
+            last_rss_update: DateTime::from_timestamp(0, 0).unwrap(),
+            self_id: None,
+            history: VecDeque::new(),
+            multimessages: HashMap::new(),
+            mmpositions: HashMap::new(),
+            affichans: Vec::new(),
+            data_file: String::new(),
+            absolute_chans: HashMap::new(),
+            update_affichans: false,
+            command_checker: Box::new(|_| async {Ok(true)}.boxed()),
+            owners: HashSet::new(),
+        }
+    }
 }
 
 impl<T: Object> Bot<T> {
 
-    /* Loads the database. One use in Bot::new */
+    /* Loads the database. One use in Bot::setup */
     fn _load_database(data: &Yaml) -> Result<HashMap<u64, T>, ErrType> {
         println!("Chargement des données.");
 
@@ -152,8 +174,22 @@ impl<T: Object> Bot<T> {
         }).collect())
     }
 
+    /// Créé un bot avec les valeurs par défaut, puis appelle appelle automatiquement [`Bot::setup`].
+    ///
+    /// Cette fonction est un raccourci pour la création du bot sans définir de paramètres optionnels.
+    pub async fn new(
+        token: String,
+        intents: GatewayIntents,
+        savefile_path: &str,
+        commands: Vec<poise::Command<DataType<T>, ErrType>>,
+        affichans: Vec<Affichan<T>>,
+        absolute_chans: HashMap<&'static str, u64>
+    ) -> Result<Client, ErrType> {
+        Self::default().setup(token, intents, savefile_path, commands, affichans, absolute_chans).await
+    }
 
-    /// Création du bot. Attention, une fois le bot crée, il faudra le lancer par un appel à
+    /// Création du bot. Attention, une fois le bot crée, un [`Client`] est renvoyé ; il n'est
+    /// alors plus possible de modifier les paramètres optionnels du bot. Il faudra le lancer par un appel à
     /// [`Client::start`] sur le [`Client`] renvoyé.
     ///
     /// C’est dans cette métohde que les [`Affichan`] et les commandes sont initialisées ; il n’est
@@ -172,7 +208,7 @@ impl<T: Object> Bot<T> {
     /// dans le chargement du fichier de sauvegarde en YAML pour éviter toute corruption ou
     /// suppression accidentelle de données.
     ///
-    pub async fn new(
+    pub async fn setup(mut self,
         token: String,
         intents: GatewayIntents,
         savefile_path: &str,
@@ -185,29 +221,23 @@ impl<T: Object> Bot<T> {
         let data = data_str.map_or(None, |s| YamlLoader::load_from_str(s.as_str()).ok());
         let mut last_update = 0;
 
-        let mut bot = Self {
-            database: {
-                if let Some(data) = &data {
-                    let data = &data[0];
-                    last_update = data["last_rss_update"].as_i64().unwrap_or(0);
-                    Self::_load_database(data)?
-                } else {
-                    println!("Pas de base de donnée trouvée : création d’une nouvelle.");
-                    HashMap::new()
-                }
-            },
-            last_rss_update: DateTime::from_timestamp(last_update, 0)
-                .ok_or(ErrType::YamlParseError("Mauvais format de date pour last_rss_update.".to_string()))?,
-            self_id: None,
-            history: VecDeque::new(),
-            multimessages: HashMap::new(),
-            mmpositions: HashMap::new(),
-            affichans,
-            data_file: savefile_path.to_string(),
-            absolute_chans: HashMap::new(),
-            update_affichans: false,
-            command_checker: Box::new(|_| async {Ok(true)}.boxed())
+        self.database = {
+            if let Some(data) = &data {
+                let data = &data[0];
+                last_update = data["last_rss_update"].as_i64().unwrap_or(0);
+                Self::_load_database(data)?
+            } else {
+                println!("Pas de base de donnée trouvée : création d’une nouvelle.");
+                HashMap::new()
+            }
         };
+
+        self.last_rss_update = DateTime::from_timestamp(last_update, 0)
+            .ok_or(ErrType::YamlParseError("Mauvais format de date pour last_rss_update.".to_string()))?;
+
+        self.affichans = affichans;
+
+        self.data_file = savefile_path.to_string();
 
         println!("Création du framework.");
 
@@ -259,13 +289,13 @@ impl<T: Object> Bot<T> {
                     println!("Enregistrement des commandes.");
                     poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                     println!("Récupération de l’identifiant.");
-                    bot.self_id = Some(ready.user.id);
+                    self.self_id = Some(ready.user.id);
                     println!("Chargement des salons d’affichage.");
                     ctx.set_activity(Some(ActivityData::custom("Chargement des salons…")));
                     let affichans_data = if let Some(data) = &data {
                         Some(&data[0]["affichans"])
                     } else {None};
-                    try_join_all(bot.affichans.iter_mut().map(
+                    try_join_all(self.affichans.iter_mut().map(
                         |affichan| {
                             /* Ok, ça c’est monstrueux mais j’ai la flemme de trouver quelque chose de plus élégant.
                              * Récupère le Yaml lié à l’affichan
@@ -276,12 +306,12 @@ impl<T: Object> Bot<T> {
                                 affichans_data.as_hash().map(|affichans_data| /* Extrait le Hash de l’Option créée par as_hash */
                                     affichans_data.get(&Yaml::Integer(affichan.get_chan_id() as i64))
                                 )).flatten().flatten(); /* On se débarrasse des Options imbriqués */
-                            affichan.init(&bot.database, bot.self_id.as_ref().unwrap(), affichan_data, ctx)
+                            affichan.init(&self.database, self.self_id.as_ref().unwrap(), affichan_data, ctx)
                         }
                     )).await?;
                     println!("Chargement des salons absolus.");
 
-                    bot.absolute_chans = try_join_all(absolute_chans.iter().map(|(&name, chan_id)| {
+                    self.absolute_chans = try_join_all(absolute_chans.iter().map(|(&name, chan_id)| {
                         async move {
                             match serenity::ChannelId::new(*chan_id).to_channel(ctx).await {
                                 Ok(chan) => Ok((name, chan.guild().unwrap())),
@@ -290,7 +320,7 @@ impl<T: Object> Bot<T> {
                         }
                     })).await.unwrap().into_iter().collect();
 
-                    let bot_mutex = Arc::new(Mutex::new(bot));
+                    let bot_mutex = Arc::new(Mutex::new(self));
                     let bot_mutex_2 = bot_mutex.clone();
                     println!("Démarrage du thread RSS.");
                     tokio::spawn(async move {
@@ -322,8 +352,14 @@ impl<T: Object> Bot<T> {
     /// Permet de définir une fonction pour `command_checker` autre que celle par défaut.
     ///
     /// La valeur par défaut de cette fonction renvoie toujours `true`.
-    pub fn set_command_checker(mut self, f: CommandChecker<T>) -> Self {
+    pub fn command_checker(mut self, f: CommandChecker<T>) -> Self {
         self.command_checker = f;
+        self
+    }
+
+    /// Permet de définir les utilisateurs propriétaires du bot pour les commandes en ayant besoin.
+    pub fn owners(mut self, owners: HashSet<UserId>) -> Self {
+        self.owners = owners;
         self
     }
 
