@@ -5,8 +5,8 @@ use super::DataType;
 use super::ErrType;
 use super::Object;
 use crate::command_data::{CommandData, Permission};
-use crate::tools::alias;
 use crate::tools::get_object;
+use crate::tools::{alias, user_desc};
 use poise::Command;
 use poise::Context;
 use poise::{serenity_prelude as serenity, CreateReply};
@@ -74,9 +74,11 @@ pub async fn supprimer<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
     let bot = &mut ctx.data().lock().await;
     if let Some(object_id) = get_object(&ctx, bot, &critere).await? {
         bot.archive(vec![object_id]);
+        let ecrit_del = bot.database.remove(&object_id).unwrap();
+        let ecrit_del = ecrit_del.get_name();
         ctx.send(CreateReply::default()
-            .content(format!("Objet « {} » supprimé.",
-                             bot.database.remove(&object_id).unwrap().get_name()))).await?;
+            .content(format!("Objet « {ecrit_del} » supprimé."))).await?;
+        bot.log(&ctx, format!("{} a supprimé l'écrit {ecrit_del} (id: {object_id})", user_desc(ctx.author()))).await?;
         bot.update_affichans(ctx.serenity_context()).await?;
     }
     Ok(())
@@ -88,6 +90,7 @@ pub async fn annuler<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Resul
     let bot = &mut ctx.data().lock().await;
     if bot.annuler() {
         ctx.send(CreateReply::default().content("Dernière modification annulée !")).await?;
+        bot.log(&ctx, format!("{} a annulé une modification.", user_desc(ctx.author()))).await?;
     } else {
         ctx.send(CreateReply::default().content("Aucune modification récente annulable.")).await?;
     }
@@ -112,7 +115,8 @@ pub async fn renommer<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
     if let Some(object_id) = get_object(&ctx, bot, &critere).await? {
         bot.archive(vec![object_id]);
         ctx.send(CreateReply::default().content(format!("Écrit {} renommé en {nouveau_nom} !",
-            bot.database.get(&object_id).unwrap().get_name()))).await?;
+                                                        bot.database.get(&object_id).unwrap().get_name()))).await?;
+        bot.log(&ctx, format!("{} a renommé {} en {nouveau_nom} (id: {object_id})", user_desc(ctx.author()), bot.database.get(&object_id).unwrap().get_name())).await?;
         bot.database.get_mut(&object_id).unwrap().set_name(nouveau_nom);
     }
 
@@ -145,6 +149,7 @@ pub async fn doublons<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) -> Resu
             let pluriel = if nb_deleted == 1 {"s"} else {""};
             format!("{} doublon{pluriel} supprimé{pluriel}.", nb_deleted)
         })).await?;
+    bot.log(&ctx, format!("{} a nettoyé les doublons.", user_desc(ctx.author()))).await?;
     Ok(())
 }
 
@@ -161,6 +166,7 @@ pub async fn up<T: Object>(ctx: Context<'_, DataType<T>, ErrType>,
         bot.archive(vec![object_id]);
         bot.database.get_mut(&object_id).unwrap().up();
         ctx.say(format!("Objet {} up !", bot.database.get(&object_id).unwrap().get_name())).await?;
+        bot.log(&ctx, format!("{} a up {} (id: {object_id})", user_desc(ctx.author()), bot.database.get(&object_id).unwrap().get_name())).await?;
         bot.update_affichans(ctx.serenity_context()).await?;
     }
     Ok(())
@@ -173,6 +179,7 @@ pub async fn refresh_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>
     ctx.defer().await?;
     try_join_all(bot.affichans.iter_mut().map(|affichan| affichan.refresh(ctx.serenity_context()))).await?;
     ctx.say("Messages des salons d’affichage réinitialisés.").await?;
+    bot.log(&ctx, format!("{} a nettoyé les salons d'affichage.", user_desc(ctx.author()))).await?;
     Ok(())
 }
 
@@ -184,6 +191,7 @@ pub async fn reset_affichans<T: Object>(ctx: Context<'_, DataType<T>, ErrType>) 
     try_join_all(bot.affichans.iter_mut().map(|affichan| affichan.purge(ctx.serenity_context()))).await?;
     bot.update_affichans(ctx.serenity_context()).await?;
     ctx.say("Salons d’affichage réinitialisés.").await?;
+    bot.log(&ctx, format!("{} a réinitialisé les affichans.", user_desc(ctx.author()))).await?;
     Ok(())
 }
 

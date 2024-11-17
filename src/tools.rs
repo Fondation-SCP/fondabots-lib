@@ -271,3 +271,7 @@ pub async fn check_for_role<T: Object>(ctx: &Context<'_, DataType<T>, ErrType>, 
         Ok(false)
     }
 }
+
+pub fn user_desc(user: &User) -> String {
+    format!("{} (id: {})", user.display_name(), user.id)
+}

@@ -37,7 +37,7 @@ use poise::futures_util::FutureExt;
 use poise::reply::CreateReply;
 use poise::Context;
 use poise::Framework;
-use serenity::all::{ActivityData, UserId};
+use serenity::all::{ActivityData, ChannelId, UserId};
 use serenity::all::{ButtonStyle, Context as SerenityContext, CreateInteractionResponse, CreateInteractionResponseMessage, GuildChannel, MessageId};
 use serenity::all::{ComponentInteraction, CreateButton, GatewayIntents};
 use serenity::all::{CreateActionRow, EditMessage, Interaction};
@@ -50,7 +50,7 @@ use tokio::time;
 use yaml_rust2::{yaml, Yaml, YamlEmitter, YamlLoader};
 
 use crate::command_data::CommandChecker;
-use crate::tools::basicize;
+use crate::tools::{basicize, Preloaded, PreloadedChannel};
 use affichan::Affichan;
 /// Type d’erreur utilisé par la bibliothèque fondabots. Renommé ici pour permettre un
 /// changement rapide si besoin et l’évitement d’une confusion avec d’autres types d’erreurs.
@@ -138,6 +138,9 @@ pub struct Bot<T: Object> {
 
     /* Stockage des owners, transféré au Framework */
     owners: HashSet<UserId>,
+
+    /* Salon des logs. Si None, aucun log ne sera produit. */
+    log: Option<PreloadedChannel>
 }
 
 impl<T: Object> Default for Bot<T> {
@@ -155,6 +158,7 @@ impl<T: Object> Default for Bot<T> {
             update_affichans: false,
             command_checker: Box::new(|_| async {Ok(true)}.boxed()),
             owners: HashSet::new(),
+            log: None
         }
     }
 }
@@ -303,15 +307,10 @@ impl<T: Object> Bot<T> {
                     } else {None};
                     try_join_all(self.affichans.iter_mut().map(
                         |affichan| {
-                            /* Ok, ça c’est monstrueux mais j’ai la flemme de trouver quelque chose de plus élégant.
-                             * Récupère le Yaml lié à l’affichan
-                             * L’idée est de garder les Options et de propager les None tout en appliquant des transformations
-                             * qui génèrent encore plus d’Options, quel enfer.
-                             */
-                            let affichan_data = affichans_data.map(|affichans_data| /* Extrait le Yaml de l’Option */
-                                affichans_data.as_hash().map(|affichans_data| /* Extrait le Hash de l’Option créée par as_hash */
-                                    affichans_data.get(&Yaml::Integer(affichan.get_chan_id() as i64))
-                                )).flatten().flatten(); /* On se débarrasse des Options imbriqués */
+                            let affichan_data = affichans_data
+                                .and_then( |affichans_data| affichans_data.as_hash()
+                                    .and_then(|affichans_data| affichans_data.get(&Yaml::Integer(affichan.get_chan_id() as i64)))
+                            );
                             affichan.init(&self.database, self.self_id.as_ref().unwrap(), affichan_data, ctx)
                         }
                     )).await?;
@@ -319,12 +318,23 @@ impl<T: Object> Bot<T> {
 
                     self.absolute_chans = try_join_all(absolute_chans.iter().map(|(&name, chan_id)| {
                         async move {
-                            match serenity::ChannelId::new(*chan_id).to_channel(ctx).await {
+                            match ChannelId::new(*chan_id).to_channel(ctx).await {
                                 Ok(chan) => Ok((name, chan.guild().unwrap())),
                                 Err(e) => Err(e)
                             }
                         }
                     })).await.unwrap().into_iter().collect();
+
+                    println!("Chargement du salon des logs, s'il existe.");
+                    if let Some(log) = self.log {
+                        self.log = match log.load(ctx).await.ok() {
+                            Some(chan) => Some(PreloadedChannel::Loaded(chan)),
+                            None => {
+                                eprintln!("Erreur de chargement du salon des logs.");
+                                None
+                            }
+                        };
+                    }
 
                     let bot_mutex = Arc::new(Mutex::new(self));
                     let bot_mutex_2 = bot_mutex.clone();
@@ -367,6 +377,19 @@ impl<T: Object> Bot<T> {
     pub fn owners(mut self, owners: HashSet<UserId>) -> Self {
         self.owners = owners;
         self
+    }
+
+    /// Définit un salon pour les logs.
+    pub fn set_log(mut self, chan_id: u64) -> Self {
+        self.log = Some(PreloadedChannel::Unloaded(ChannelId::new(chan_id)));
+        self
+    }
+
+    pub async fn log(&self, ctx: &Context<'_, DataType<T>, ErrType>, text: String) -> Result<(), ErrType> {
+        if let Some(PreloadedChannel::Loaded(log)) = &self.log {
+            log.say(ctx, text).await?;
+        }
+        Ok(())
     }
 
     /* Affiche la page suivante ou précédente d’un multimessage après appui sur un bouton, utilisé dans handle_interaction */
