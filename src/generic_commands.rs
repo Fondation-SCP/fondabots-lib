@@ -76,8 +76,16 @@ pub async fn change_field<T: Object, F: Field<T>>(ctx: Context<'_, DataType<T>, 
     let bot = &mut ctx.data().lock().await;
     if let Some(object_id) = get_object(&ctx, bot, &critere).await? {
         bot.archive(vec![object_id]);
-        let object = bot.database.get_mut(&object_id).unwrap();
+        let object = bot.database.get(&object_id).unwrap();
         ctx.say(format!("{} de « {} » changé pour « {field} »", F::field_name() ,object.get_name())).await?;
+        bot.log(&ctx, format!("{} a changé la propriété {} de l'objet {} (id: {}) pour {}.",
+            tools::user_desc(ctx.author()),
+            F::field_name(),
+            object.get_name(),
+            object_id,
+            field
+        )).await?;
+        let object = bot.database.get_mut(&object_id).unwrap();
         F::set_for(object, &field);
         object.set_modified(true);
     }

@@ -385,7 +385,7 @@ impl<T: Object> Bot<T> {
         self
     }
 
-    pub async fn log(&self, ctx: &Context<'_, DataType<T>, ErrType>, text: String) -> Result<(), ErrType> {
+    pub async fn log(&self, ctx: &impl CacheHttp, text: String) -> Result<(), ErrType> {
         if let Some(PreloadedChannel::Loaded(log)) = &self.log {
             log.say(ctx, text).await?;
         }
