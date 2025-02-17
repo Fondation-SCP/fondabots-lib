@@ -1,6 +1,7 @@
 //! Module contenant la structure [`Affichan`].
 
 use errors::Error;
+use poise::serenity_prelude as serenity;
 use serenity::all::Message;
 use serenity::all::{ChannelId, MessageId, UserId};
 use serenity::all::{Context as SerenityContext, Context};
