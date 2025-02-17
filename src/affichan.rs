@@ -71,7 +71,7 @@ impl<T: Object> Affichan<T> {
         }).collect())
     }
 
-    /* Charge une sauvegarde d’Affichan. Fonction utilisée dans init. */
+/* Charge une sauvegarde d’Affichan. Fonction utilisée dans init. */
     async fn _load_from_save(&self, saved_data: &Yaml, ctx: &SerenityContext) -> Result<HashMap<u64, Message>, ErrType> {
         println!("Chargement à partir d'une sauvegarde d'affichan…");
         Ok(try_join_all(saved_data.as_vec().ok_or(ErrType::YamlParseError("Erreur de yaml dans les affichans: pas un tableau.".to_string()))?

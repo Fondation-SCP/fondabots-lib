@@ -25,7 +25,7 @@
 #![doc(issue_tracker_base_url = "https://github.com/Fondation-SCP/fondabots-lib/issues/")]
 
 
-use poise::serenity_prelude as serenity;
+use poise::{serenity_prelude as serenity, BoxFuture};
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -79,6 +79,13 @@ pub mod object;
 /// `T` doit implémenter [`Object`] : il faut garder en tête que ce type n’est qu’un
 /// raccourci vers [`Bot`] qui impose `T: Object`.
 pub type DataType<T> = Arc<Mutex<Bot<T>>>;
+
+/// Type de fonction utilisée pour traiter les évènements Discord hors de la librairie Fondabots.
+///
+/// Cela permet aux bots Discord implémentant la librairie de traiter des évènements supplémentaires
+/// avant que Fondabots ne les traite. Si la fonction retourne `false` ou une erreur, alors
+/// l'évènement ne sera pas traité par la librairie Fondabots.
+pub type EventHandler<T> = for<'a> fn(&'a serenity::Context,&'a FullEvent,&'a DataType<T>) -> BoxFuture<'a, Result<bool, ErrType>>;
 
 /// Structure de données de bot. Cette structure, où `T` est l’implémentation d’un [`Object`]
 /// pour le bot souhaité, contient, entre autre, la base de données et les salons d’affichage.
@@ -136,6 +143,10 @@ pub struct Bot<T: Object> {
     /// optionnelle. Par défaut, elle renvoie toujours `true`.
     pub(crate) command_checker: Box<CommandChecker<T>>,
 
+    /* Envoie les events vers cette fonction avant qu'ils ne soient traités ensuite par le bot si
+       la fonction l'autorise. */
+    event_handler: EventHandler<T>,
+
     /* Stockage des owners, transféré au Framework */
     owners: HashSet<UserId>,
 
@@ -157,6 +168,7 @@ impl<T: Object> Default for Bot<T> {
             absolute_chans: HashMap::new(),
             update_affichans: false,
             command_checker: Box::new(|_| async {Ok(true)}.boxed()),
+            event_handler: |_, _, _| async {Ok(true)}.boxed(),
             owners: HashSet::new(),
             log: None
         }
@@ -261,11 +273,17 @@ impl<T: Object> Bot<T> {
                     Box::pin(async move {
                         let bot = &mut data.lock().await;
 
+                        match (bot.event_handler)(ctx, event, data).await {
+                            Ok(false) => return Ok(()),
+                            Err(e) => return Err(e),
+                            Ok(true) => ()
+                        }
+
                         /* Traitement des évènements */
                         if let Err(e) = match event {
                             FullEvent::InteractionCreate {interaction: Interaction::Component(component), ..} => bot.handle_interaction(ctx, &mut component.clone()).await,
                             FullEvent::MessageDelete {deleted_message_id, ..} => bot.check_deletions(ctx, &deleted_message_id).await,
-                            _ => return Ok(()) /* Évite de mettre à jour les affichans ou sauvegarde à chaque event */
+                            _ => return Ok(())  /* Évite de mettre à jour les affichans ou sauvegarde à chaque event */
                         } {
                             eprintln!("Erreur lors de la réception d’un évènement : {e}");
                             return Err(e);
@@ -370,6 +388,16 @@ impl<T: Object> Bot<T> {
     /// La valeur par défaut de cette fonction renvoie toujours `true`.
     pub fn command_checker(mut self, f: Box<CommandChecker<T>>) -> Self {
         self.command_checker = f;
+        self
+    }
+
+    /// Ajoute un EventHandler supplémentaire permettant de traiter des évènements Discord
+    /// avant la librairie Fondabots. Voir crate::EventHandler pour plus de précisions.
+    ///
+    /// Si cette fonction renvoie Ok(false) ou Err(_), l'évènement ne sera pas traité par la
+    /// librairie Fondabots.
+    pub fn event_handler(mut self, f: EventHandler<T>) -> Self {
+        self.event_handler = f;
         self
     }
 
