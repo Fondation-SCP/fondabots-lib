@@ -1,6 +1,7 @@
 //! Module contenant la structure [`Affichan`].
 
 use errors::Error;
+use poise::futures_util::{StreamExt, TryStreamExt};
 use poise::serenity_prelude as serenity;
 use serenity::all::Message;
 use serenity::all::{ChannelId, MessageId, UserId};
@@ -8,6 +9,7 @@ use serenity::all::{Context as SerenityContext, Context};
 use serenity::futures::future::{join_all, try_join_all};
 use std::collections::HashMap;
 use std::mem::take;
+use std::sync::Arc;
 use tools::PreloadedChannel;
 use yaml_rust2::{yaml, Yaml};
 
@@ -75,25 +77,39 @@ impl<T: Object> Affichan<T> {
 /* Charge une sauvegarde d’Affichan. Fonction utilisée dans init. */
     async fn _load_from_save(&self, saved_data: &Yaml, ctx: &SerenityContext) -> Result<HashMap<u64, Message>, ErrType> {
         println!("Chargement à partir d'une sauvegarde d'affichan…");
-        Ok(try_join_all(saved_data.as_vec().ok_or(ErrType::YamlParseError("Erreur de yaml dans les affichans: pas un tableau.".to_string()))?
-            .into_iter().map(|yaml_message| async { match yaml_message.as_hash() {
-            Some(_) => {
-                let object_id = yaml_message["id"].as_i64();
-                let message_id = yaml_message["message_id"].as_i64();
+        /* Clonage gênant (clone toutes les données yaml de l'affichan) mais nécessaire pour pouvoir
+           refiler les données aux threads.
+         */
+        let saved_data = saved_data.as_vec()
+            .ok_or(ErrType::YamlParseError("Erreur de yaml dans les affichans: pas un tableau.".to_string()))?
+            .iter().filter_map(|yaml_message| match yaml_message.as_hash() {
+                Some(_) => Some((yaml_message["id"].as_i64(), yaml_message["message_id"].as_i64())),
+                None => {eprintln!("Attention : l'une des entrées d'une sauvegarde d'affichan n'est pas un Hash."); None}
+            }).collect::<Vec<_>>();
+
+        let ctx = Arc::new(ctx.clone());
+        let chan = Arc::new(self.chan.get().unwrap().clone());
+
+        let futures = saved_data.into_iter()
+            .map(move |(object_id, message_id)| {
+            let ctx = ctx.clone();
+            let chan = chan.clone();
+            async move {
                 if object_id.is_none() || message_id.is_none() {
                     Err(ErrType::YamlParseError("Erreur de yaml dans un affichan: un identifiant n’est pas un entier.".into()))
                 } else {
                     let message_id = message_id.unwrap() as u64;
                     println!("Récupération du message {message_id}…");
-                    match self.chan.get().unwrap().message(ctx, MessageId::new(message_id)).await {
+                    match chan.message(ctx, MessageId::new(message_id)).await {
                         Ok(message) => Ok(Some((object_id.unwrap() as u64, message))),
                         Err(_) => {eprintln!("Message {message_id} non trouvé sur Discord. Tant pis."); Ok(None)}
                     }
                 }
-            },
-            None => Err(ErrType::YamlParseError("Erreur de yaml dans un affichan: l’une des entrées n’est pas un dictionnaire.".into()))
-        }}
-        )).await?.into_iter().filter_map(|x| x).collect())
+            }
+        });
+
+        Ok(tokio_stream::iter(futures).buffer_unordered(4).try_collect::<Vec<_>>().await?
+            .into_iter().filter_map(|x| x).collect())
     }
 
     /* Retrouve les objets de l’Affichan d’après les messages déjà présents dans le salon Discord. Fonction utilisée dans init. */
@@ -101,27 +117,31 @@ impl<T: Object> Affichan<T> {
         println!("Chargement à partir des messages…");
         let self_messages = &self.messages;
 
-        Ok(try_join_all(messages.iter().filter(|message|
+        Ok(join_all(messages.into_iter().filter(|message|
             message.author.id.get() == self_id.get()
                 && !message.embeds.is_empty()
         )
-            .filter_map(|message| message.embeds.get(0).unwrap().footer.as_ref().and_then(|footer| Some((message, footer))))
-            .filter_map(|(message, footer)| footer.text.parse().ok().and_then(|footer_text| Some((message, footer_text))))
-            .map(|(message, footer_text)| async move {
-                if let Some(object) = database.get(&footer_text) {
+            .filter_map(|message| message.embeds.get(0).unwrap()
+                .footer.as_ref()
+                .and_then(|footer| footer.text.parse().ok())
+                .and_then(|footer_text| Some((message, footer_text))))
+            .map(|(message, footer_id)| async move {
+                if let Some(object) = database.get(&footer_id) {
                     if !self_messages.contains_key(&object.get_id()) {
-                        Ok(Some((object.get_id(), message.clone())))
+                        Some((object.get_id(), message.clone()))
                     } else {
                         eprintln!("Message {} en trop: suppression.", message.id);
-                        let res = message.delete(ctx).await;
-                        res.and_then(|_| Ok(None))
+                        let ctx = ctx.clone();
+                        tokio::spawn(async move {message.delete(ctx).await});
+                        None
                     }
                 } else {
                     eprintln!("Message {} sans objet associé: message supprimé.", message.id);
-                    let res = message.delete(ctx).await;
-                    res.and_then(|_| Ok(None))
+                    let ctx = ctx.clone();
+                    tokio::spawn(async move {message.delete(ctx).await});
+                    None
                 }
-            })).await?
+            })).await
             .into_iter().filter_map(|option| option).collect())
     }
 
@@ -167,26 +187,32 @@ impl<T: Object> Affichan<T> {
             }
         );
 
-        join_all(
-            deleted_elements.iter().map(|message| async {
-                if let Err(e) = message.delete(ctx).await {
-                    eprint!("Impossible de supprimer l'un des messages : {e}");
-                }
-            })
-        ).await;
+        let ctx_arc_deletions = Arc::new(ctx.clone());
+        let ctx_arc_messages = ctx_arc_deletions.clone();
+
+        tokio::spawn(tokio_stream::iter(deleted_elements.into_iter().map( move |message| {
+            let ctx = ctx_arc_deletions.clone(); /* Arc clone */
+            async move {message.delete(ctx).await}
+        })).buffer_unordered(4).collect::<Vec<_>>());
 
         let self_chan = &self.chan;
         let self_test = &self.test;
 
-        self.messages.extend(try_join_all(
-            tools::sort_by_date(self._get_new_valid_objects_from_db(database, self_test))
-                .into_iter().rev().map(|(&object_id, object)| async move {
-                        Ok::<_, ErrType>(
-                            (object_id, self_chan.get()?.send_message(ctx, object.get_message()).await?)
-                        )
-                })
-            ).await?
-        );
+        let futures_messages = tools::sort_by_date(self._get_new_valid_objects_from_db(database, self_test))
+            .into_iter().rev()
+            .map(|(&object_id, object)| (object_id, object.get_message()))
+            .collect::<Vec<_>>().into_iter() /* Nettoyage de l'ancien itérateur pour y retirer les références */
+            .map(|(object_id, create_message)| { /* Comme ça les blocs async ne capturent aucune référence */
+            let ctx = ctx_arc_messages.clone();
+            let chan = self_chan.get().unwrap().clone();
+            async move {
+                Ok::<_, ErrType>(
+                    (object_id, chan.send_message(ctx, create_message).await?)
+                )
+            }
+        });
+
+        self.messages.extend(tokio_stream::iter(futures_messages).buffered(4).try_collect::<Vec<_>>().await?);
         Ok(())
     }
 
@@ -211,12 +237,7 @@ impl<T: Object> Affichan<T> {
                 Err(_) => Some(*object_id),
                 Ok(_) => None
             }
-        })).await
-            /* On doit exécuter d’abord les futures avant de savoir si c’est Err ou Ok, d’où cette
-             * suite de fonctions un peu étrange où on utilise map pour faire des options puis
-             * filter_map pour les enlever ensuite au lieu d’utiliser filter_map directement,
-             * puisque le map génère en fait des future */
-            .into_iter().filter_map(|x| x).collect()
+        })).await.into_iter().filter_map(|x| x).collect()
     }
 
     /// Appelle [`Affichan::refresh`] et supprime en plus tous les objets de l’affichan. Les objets valides
@@ -232,26 +253,29 @@ impl<T: Object> Affichan<T> {
     /// [`Affichan::check_message_deletion`] pour tous les Affichan. Les messages seront donc republiés par
     /// la suite. N’a aucun impact sur la liste des objets de l’affichan, seulement sur les messages.
     pub async fn refresh(&mut self, ctx: &SerenityContext) -> Result<(), ErrType> {
-        try_join_all(self.messages.iter_mut().map(|(_, message)| message.delete(ctx))).await?;
+        let ctx_arc = Arc::new(ctx.clone());
+        let futures = self.messages.clone() /* Pour le lancer dans des threads */
+            .into_iter().map(|(_, message)| {
+            let ctx = ctx_arc.clone();
+            async move {
+                message.delete(ctx).await
+            }
+        });
+        tokio_stream::iter(futures).buffer_unordered(4).try_collect::<Vec<_>>().await?;
         Ok(())
     }
 
     /// Vérifie si un message supprimé correspond à un message de l’affichan. Si c’est le cas,
     /// republie le message en question.
     pub async fn check_message_deletion(&self, bot: &Bot<T>, ctx: &SerenityContext, message_id: &MessageId) -> Result<(), ErrType> {
-        try_join_all(
-            self.messages.iter().filter(|(_, message)| message.id.get() == message_id.get())
-                /* Ne peut trouver qu’un seul résultat maximum, mais on fait comme si quand-même */
-                .map(|(object_id, _)| async {
-                    match self.chan.get() {
-                        Ok(chan) => match bot.database.get(object_id) {
-                            Some(object) => chan.send_message(ctx, object.get_message()).await.or_else(|err| Err(err.into())),
-                            None => Err(Error::ObjectNotFound(format!("Objet {} référencé dans un message supprimé dans Affichan {} (id: {})", *object_id, chan.name, chan.id)))
-                        }
-                        Err(e) => Err(e)
-                    }
-                })
-        ).await?;
+        let deleted = self.messages.iter().find(|(_, message)| message.id.get() == message_id.get());
+        if let Some((object_id, _)) = deleted {
+            let chan = self.chan.get()?;
+            let object = bot.database.get(object_id)
+                .ok_or(Error::ObjectNotFound(format!("Objet {} référencé dans un message supprimé dans Affichan {} (id: {})", *object_id, chan.name, chan.id)))?;
+            chan.send_message(ctx, object.get_message()).await?;
+        }
+
         Ok(())
     }
 

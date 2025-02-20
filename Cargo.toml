@@ -1,6 +1,6 @@
 [package]
 name = "fondabots-lib"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2021"
 
 [dependencies]
@@ -9,3 +9,4 @@ tokio = { version = "1.21.2", features = ["macros", "rt-multi-thread"] }
 poise = "0.6"
 yaml-rust2 = "0.9"
 unicode-normalization = "0.1.19"
+tokio-stream = "0.1.17"

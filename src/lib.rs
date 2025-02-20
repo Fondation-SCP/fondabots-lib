@@ -28,9 +28,9 @@
 use poise::{serenity_prelude as serenity, BoxFuture};
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use std::fs;
 
 use chrono::{DateTime, Utc};
 use poise::futures_util::FutureExt;
@@ -71,7 +71,6 @@ pub mod errors;
 pub mod tools;
 pub mod generic_commands;
 pub mod object;
-
 
 /// Redéfinition du type utilisé pour des données de [`poise`], utilisant un [`Arc`] et un [`Mutex`]
 /// sur [`Bot`] pour lui permettre d’obtenir une référence mutable dans chaque commande si besoin.
@@ -323,6 +322,7 @@ impl<T: Object> Bot<T> {
                     let affichans_data = if let Some(data) = &data {
                         Some(&data[0]["affichans"])
                     } else {None};
+
                     try_join_all(self.affichans.iter_mut().map(
                         |affichan| {
                             let affichan_data = affichans_data
