@@ -28,9 +28,9 @@
 use poise::{serenity_prelude as serenity, BoxFuture};
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use std::fs;
 
 use chrono::{DateTime, Utc};
 use poise::futures_util::FutureExt;
@@ -555,10 +555,12 @@ impl<T: Object> Bot<T> {
     /// « fondations » rejettera ce titre.
     pub fn search(&self, critere: &str) -> Vec<&u64> {
         self.database.iter().filter(|(_, object)|
-             critere.split(" ").fold(false, |corresponds, mot_critere| {
-                 corresponds || object.get_name().split(" ")
-                     .fold(false, |found, mot_objet| found || basicize(mot_objet).contains(&basicize(mot_critere)))
-             })
+            critere.split(" ")
+                .map(basicize)
+                .all(|mot_critere|
+                    object.get_name().split(" ")
+                        .map(basicize)
+                        .any(|mot_objet| mot_objet.contains(&mot_critere)))
         ).map(|(object_id, _)| object_id).collect()
     }
 
